@@ -9,6 +9,8 @@
 int dm_mem_guard(void);   // nvn_mtl.m: the memory guard level, shown in the HUD
 #include <errno.h>
 #include "front.h"
+#include "nvn_frame_metrics.h"
+#include "bc_cache.h"
 #include "hle.h"
 #include "dm.h"
 #include "haptics_apple.h"
@@ -92,7 +94,7 @@ static void launcher_done(void) { [g_root startGame]; }
     self.game.frame = CGRectMake(floor((b.size.width - w) / 2), floor((b.size.height - h) / 2), w, h);
     if (self.fps) {   // the top row's free stretch: right of DmGamepad.m's L3 key (102 + 17 of its units from the safe edge), level with − / + (22 units down); u is its unit
         CGRect s = UIEdgeInsetsInsetRect(b, self.view.safeAreaInsets); CGFloat u = MIN(b.size.height / 430.0, 1.3);
-        self.fps.frame = CGRectMake(floor(CGRectGetMinX(s) + 130 * u), floor(CGRectGetMinY(s) + 22 * u - 11), g_hud ? 330 : 64, 22);
+        self.fps.frame = CGRectMake(floor(CGRectGetMinX(s) + 130 * u), floor(CGRectGetMinY(s) + 22 * u - 11), g_hud ? MIN(560, s.size.width - 140 * u) : 64, g_hud ? 44 : 22);
     }
 }
 - (void)viewDidAppear:(BOOL)a {
@@ -120,6 +122,7 @@ int dm_thermal_now(void) { return (int)NSProcessInfo.processInfo.thermalState; }
 int dm_low_power_now(void) { return NSProcessInfo.processInfo.lowPowerModeEnabled; }   // the frame step does not probe in it (hle_nvn.c fstep_cpu_slowed)
 double dm_brightness_now(void) { return g_brightness; }
 static void front_ios_power_watch(void) {
+    [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { (void)n; nvn_frame_metrics_reset(); }];
     g_brightness = UIScreen.mainScreen.brightness;
     [NSNotificationCenter.defaultCenter addObserverForName:UIScreenBrightnessDidChangeNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { (void)n; g_brightness = UIScreen.mainScreen.brightness; }];
     [NSNotificationCenter.defaultCenter addObserverForName:NSProcessInfoThermalStateDidChangeNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
@@ -132,6 +135,7 @@ static void front_ios_power_watch(void) {
 // Frame-rate counter: the frames put on screen in the last second (nvn_mtl.m counts them for NVN and for the Vulkan layer alike; frames the display link merged away are not counted).
 // On when the IPA was built with it (the NSP script's SHOW_FPS / --show-fps → DMShowFPS in Info.plist); DM_SHOW_FPS=0 / 1 in Documents/env.txt overrides that without a rebuild. NULL when off
 uint64_t mtl_present_count(void);
+uint64_t mtl_last_displayed_ticket(void);
 double mtl_gpu_ms(uint64_t f);
 // DM_METAL_HUD (g_hud): the counter also shows the GPU time of a recent frame, the app's memory and what is left before iOS's limit (Apple's own HUD needs MTL_HUD_ENABLED before the
                     // first Metal device, which the host makes during its early loading, before the launcher sets the switch: it never appeared from the launcher)
@@ -142,6 +146,7 @@ static UILabel *front_ios_fps_label(void) {
     UILabel *l = [UILabel new];
     l.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightSemibold]; l.textColor = UIColor.whiteColor; l.textAlignment = NSTextAlignmentCenter;
     l.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45]; l.layer.cornerRadius = 6; l.layer.masksToBounds = YES; l.userInteractionEnabled = NO;
+    l.numberOfLines = g_hud ? 2 : 1;
     l.text = @"-- fps";
     __block uint64_t n0 = mtl_present_count(); __block double t0 = CACurrentMediaTime();
     [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
@@ -152,9 +157,12 @@ static UILabel *front_ios_fps_label(void) {
             else {
                 task_vm_info_data_t vi; mach_msg_type_number_t c = TASK_VM_INFO_COUNT; double used = 0;
                 if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vi, &c) == KERN_SUCCESS) used = vi.phys_footprint / 1073741824.0;
-                double left = os_proc_available_memory() / 1073741824.0, gpu = n > 8 ? mtl_gpu_ms(n - 4) : -1;
+                uint64_t ticket = mtl_last_displayed_ticket();
+                double left = os_proc_available_memory() / 1073741824.0, gpu = ticket > 8 ? mtl_gpu_ms(ticket - 4) : -1;
+                nvn_frame_metrics fm = nvn_frame_metrics_snapshot();
+                nvn_bc_cache_info bc = nvn_bc_cache_stats();
                 int mg = dm_mem_guard();
-                l.text = [NSString stringWithFormat:@" %.0f fps · GPU %@ · %.2f GB · %.2f GB left%@ ", fps, gpu >= 0 ? [NSString stringWithFormat:@"%.1f ms", gpu] : @"--", used, left, mg == 2 ? @" · GUARD 30+flush" : mg == 1 ? @" · GUARD 30" : @""];
+                l.text = [NSString stringWithFormat:@" %.0f real fps · GPU %@ · p95 %.1f ms · >50ms %u/%u\n %.2f GB used · %.2f GB left · ASTC hits %llu%@ ", fps, gpu >= 0 ? [NSString stringWithFormat:@"%.1f ms", gpu] : @"--", fm.p95_ms, fm.stalls50, fm.samples, used, left, (unsigned long long)bc.hits, mg ? @" · GUARD 30" : @""];
                 l.textColor = left < 0.25 ? UIColor.systemRedColor : left < 0.5 ? UIColor.systemOrangeColor : UIColor.whiteColor;   // red: iOS is about to close the app
             }
         }

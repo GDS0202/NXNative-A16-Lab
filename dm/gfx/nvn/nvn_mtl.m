@@ -23,6 +23,7 @@
 #include "nvn_obj.h"
 #include "../tex/nvn_fmt_mtl.h"
 #include "../tex/bc_soft.h"
+#include "../tex/bc_cache.h"
 #include "../tex/nvn_deswizzle.h"
 #include "../tex/nvn_deswizzle_gpu.h"
 #include "nvn_builtin.h"
@@ -32,6 +33,7 @@
 #include "nvn_cover.h"
 #include "nvn_primitive.h"
 #include "nvn_timestamp.h"
+#include "nvn_frame_metrics.h"
 #include "dmsh_chain.h"   // DMSH_CHAIN: the translation chain version of the B shader library expected by this source tree, one for every game (beside this file, tools/dmsh_chain.py --header)
 #include "game_profile.h"   // game profile constants (profile id, the profile's switches)
 // Texture slot table per stage: 0-127 the combined handles (nvnCommandBufferBindTexture), 128-255 the separate texture binds (NVN_SEPTEX_SLOT0, nvn_obj.h)
@@ -293,45 +295,21 @@ static void defer_obj_unref(id obj) { defer_obj_release_ex(obj, 1); }
 // Its own autorelease pool: mtl_sub_begin drains before it pushes the submission's pool, on the guest submit thread, whose implicit pool is never drained. The weak-table lookups and the residency-set removal
 // autorelease the retired object, so whatever that thread drained (instead of the completion handler, which wins the race only when the CPU is idle) stayed alive for good: in Metroid Dread every
 // re-upload of its map mask kept the old texture and its 32 MB upload staging block, and GPU memory grew by several GB within minutes under CPU load.
-// DM_NVN_TEX_DISCARD=1 (the launcher's Texture memory saver, on by default on 6 GB devices): once the GPU has a packaged texture (its upload done, the fence passed), the whole host pages of
-// its storage go back to iOS (madvise MADV_FREE_REUSABLE): the game's copy and the Metal texture held the same bytes twice, and Tears of the Kingdom on an A16 iPad was closed by iOS 70 MB
-// short of its limit when a save loaded. A later game write into those pages faults as before (nvn_dirty) and re-uploads; content the game did not rewrite reads as zeros there, so a texture
-// re-uploaded after a partial write can show wrong texels: rare (one re-upload in minutes of TotK), and the setting turns it off. Pages shared with other data (the storage's first and last) are kept
-typedef struct { uintptr_t a; size_t n; uint64_t fence; } disc_t;
-static pthread_mutex_t g_disc_mu = PTHREAD_MUTEX_INITIALIZER;
-static disc_t *g_disc; static size_t g_disc_n, g_disc_cap; static uint64_t g_disc_bytes, g_disc_logged; static int g_disc_on = -1;
-// DM_NVN_TEX_DISCARD: 1 always, 0 never, auto (the default): on from the moment the memory left before iOS's limit falls under 768 MB (os_proc_available_memory, checked at most
-// once a second), then for the rest of the run: the game's copies are what can go without losing anything it shows
-static int disc_on(void) {
-    if (g_disc_on < 0) {
-        const char *e = getenv("DM_NVN_TEX_DISCARD");
-        g_disc_on = e && !strcmp(e, "1") ? 1 : e && !strcmp(e, "0") ? 0 : 2;
-        if (g_disc_on == 1) MLOG("texture memory saver: the game's copy of each uploaded texture goes back to the system once the GPU has it (DM_NVN_TEX_DISCARD)");
-        if (g_disc_on == 2) MLOG("texture memory saver: automatic, on when less than 768 MB is left before the system's memory limit (DM_NVN_TEX_DISCARD=auto)");
-    }
-#if TARGET_OS_IPHONE
-    if (g_disc_on == 2) {
-        static double last; double now = CFAbsoluteTimeGetCurrent();
-        if (now - last >= 1.0) {
-            last = now; size_t left = os_proc_available_memory();
-            if (left && left < (768u << 20)) { g_disc_on = 1; MLOG("texture memory saver: on (only %zu MB left before the system's memory limit)", left >> 20); }
-        }
-    }
-#endif
-    return g_disc_on == 1;
-}
+// Guest texture backing remains readable after upload. A GPU fence does not
+// prove the guest will never read or partially update its packaged bytes.
+// MADV_FREE_REUSABLE here silently destroyed content under memory pressure.
 // Memory guard (iOS, every game; DM_MEM_GUARD=0 turns it off): iOS closes the app with no log when os_proc_available_memory reaches 0, so the host watches it twice a second and
 // on the system's memory-pressure events, and steps down before that happens. Level 1, under 600 MB left: the frame rate is capped at 30 (mtl_fps_target, the NVN frame step and the
 // GL swap all follow dm_mem_guard), which halves the per-frame transient memory and lets the deferred-release queue drain. Level 2, under 300 MB left or a critical pressure event:
-// caches go back too: the texture memory saver is forced on and the malloc zones return their free pages (malloc_zone_pressure_relief). The cap lifts once more than 1 GB is left
+// caches go back too: asynchronous texture-cache writes stop and the malloc zones return their free pages (malloc_zone_pressure_relief). The cap lifts once more than 1 GB is left
 // for 15 s in a row. A game whose logic counts frames runs slower while capped, which beats being closed
 static _Atomic int g_mem_level;
-static int g_mem_flushes;
+static _Atomic int g_mem_flushes;
 static void mem_flush(const char *why, size_t left) {
-    g_disc_on = 1;   // texture memory saver on for the rest of the run (disc_on)
+    nvn_bc_cache_pressure(2);
     size_t freed = malloc_zone_pressure_relief(NULL, 0);
     g_mem_flushes++;
-    MLOG("memory guard: caches flushed (%s, %zu MB left): texture memory saver on, %zu MB of free malloc pages returned to the system", why, left >> 20, freed >> 20);
+    MLOG("memory guard: caches flushed (%s, %zu MB left): texture cache writes paused, %zu MB of free malloc pages returned to the system", why, left >> 20, freed >> 20);
 }
 static void mem_sample(int event) {
     static double calm_since; static int last_logged = -1;
@@ -344,6 +322,7 @@ static void mem_sample(int event) {
     if (left > (1024u << 20)) { if (!calm_since) calm_since = now; if (lv && now - calm_since >= 15) lv = 0; }
     else calm_since = 0;
     if (lv == 2 && was < 2) mem_flush(event == 2 ? "critical memory pressure from the system" : "under 300 MB left", left);
+    nvn_bc_cache_pressure(lv);
     atomic_store(&g_mem_level, lv);
     if (lv != last_logged) {
         last_logged = lv;
@@ -372,29 +351,7 @@ int dm_mem_guard(void) {
 #endif
 }
 int dm_mem_guard_flushes(void) { return g_mem_flushes; }
-static void disc_queue(const void *mem, size_t len) {
-    if (!disc_on() || !mem || !len) return;
-    uintptr_t pg = (uintptr_t)getpagesize(), a = ((uintptr_t)mem + pg - 1) & ~(pg - 1), b = ((uintptr_t)mem + len) & ~(pg - 1);
-    if (b <= a) return;
-    pthread_mutex_lock(&g_disc_mu);
-    if (g_disc_n == g_disc_cap) { size_t c = g_disc_cap ? g_disc_cap * 2 : 256; disc_t *nd = realloc(g_disc, c * sizeof *nd); if (!nd) { pthread_mutex_unlock(&g_disc_mu); return; } g_disc = nd; g_disc_cap = c; }
-    g_disc[g_disc_n++] = (disc_t){a, b - a, g_fence + 1};
-    pthread_mutex_unlock(&g_disc_mu);
-}
-static void disc_drain(void) {
-    if (g_disc_on != 1) return;
-    pthread_mutex_lock(&g_disc_mu);
-    size_t k = 0;
-    for (size_t i = 0; i < g_disc_n; i++) {
-        if (g_disc[i].fence <= g_done) { if (!madvise((void *)g_disc[i].a, g_disc[i].n, MADV_FREE_REUSABLE)) g_disc_bytes += g_disc[i].n; }
-        else g_disc[k++] = g_disc[i];
-    }
-    g_disc_n = k;
-    uint64_t b = g_disc_bytes;
-    pthread_mutex_unlock(&g_disc_mu);
-    if (b >= g_disc_logged + (256ull << 20)) { g_disc_logged = b; MLOG("texture memory saver: %.2f GB of texture copies returned to the system so far", b / 1073741824.0); }
-}
-static void defer_drain(void) { disc_drain(); @autoreleasepool {
+static void defer_drain(void) { @autoreleasepool {
     NSMutableArray<NvDeferredRelease *> *ready = [NSMutableArray array];
     pthread_mutex_lock(&g_deferred_mu);
     for (NSInteger i = g_deferred.count - 1; i >= 0; i--) {
@@ -500,6 +457,9 @@ void mtl_init(void) {
         const char *e = getenv("DM_BC_SOFT");
         nvn_bc_soft = e ? atoi(e) != 0 : ![g_dev supportsBCTextureCompression];
         const char *ea = getenv("DM_BC_ASTC"); nvn_bc_astc = ea ? atoi(ea) != 0 : 1;
+        const char *ew = getenv("DM_BC_WORKERS"); nvn_bc_workers = ew ? MAX(1, MIN(4, atoi(ew))) : 2;
+        if (nvn_bc_soft) MLOG("BC upload workers: %d (bounded, DM_BC_WORKERS); verified ASTC disk cache enabled unless DM_BC_CACHE=off", nvn_bc_workers);
+        if (getenv("DM_NVN_TEX_DISCARD")) MLOG("DM_NVN_TEX_DISCARD ignored: guest texture backing must survive partial writes");
         if (nvn_bc_soft) MLOG("BC textures: decoded on the CPU (%s) into %s", e ? "DM_BC_SOFT" : "this GPU has no BC texture support",
                               nvn_bc_astc ? "ASTC 4x4 (BC1 / 2 / 3 / 7: a quarter of RGBA8's memory) and RG11B10F (BC6H unsigned); DM_BC_ASTC=0 for uncompressed formats" : "uncompressed formats (DM_BC_ASTC=0)");
     }
@@ -2026,6 +1986,10 @@ static unsigned g_up_seq;
 #define UP_SLOT_BLOCK (4u * 1024u * 1024u)
 static __strong id<MTLBuffer> g_up_slot_blk[3], g_up_slot_over[3]; static unsigned g_up_cur_slot;
 static size_t g_up_slot_want[3], g_up_batch_bytes; static int g_up_over_used;
+// CPU transcodes need shared storage; the GPU deswizzle arena is private.
+// Reuse at most 8 MiB per fenced upload slot, never before its batch completes.
+static __strong id<MTLBuffer> g_up_cpu_slot[3];
+static int g_up_cpu_used;
 static int up_reuse(void) { static int on = -1; if (on < 0) { const char *e = getenv("DM_NVN_UPLOAD_REUSE"); on = !e || atoi(e); } return on; }
 static int up_retained(id<MTLBuffer> b, unsigned slot) { return b && (b == g_up_slot_blk[slot] || b == g_up_slot_over[slot]); }
 typedef struct {
@@ -2124,7 +2088,8 @@ static void up_begin(void) {
     if (atomic_load(&g_up_alloc_busy[slot])) rec_publish();
     up_wait_zero(&g_up_alloc_busy[slot], WS_UPALLOC);
     atomic_store(&g_up_alloc_busy[slot], 1); g_up_cur_slot = slot;
-    g_up_batch_bytes = 0; g_up_over_used = 0;
+    g_up_batch_bytes = 0; g_up_over_used = 0; g_up_cpu_used = 0;
+    if (atomic_load(&g_mem_level) && g_up_cpu_slot[slot]) { defer_obj_release(g_up_cpu_slot[slot]); g_up_cpu_slot[slot] = nil; }
     [g_up_alloc4[slot] reset];
     g_up_cb = [g_dev newCommandBuffer];
     [g_up_cb beginCommandBufferWithAllocator:g_up_alloc4[slot]];
@@ -2335,8 +2300,19 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
         nvn_sparse_copy(t->pool, part, (uint64_t)(uintptr_t)t->mem, t->L.size); src = part;
     }
     up_begin();
-    id<MTLBuffer> stg = [g_dev newBufferWithLength:total ? total : 16 options:MTLResourceStorageModeShared];
-    res_add(stg); [g_up_keep addObject:stg];
+    id<MTLBuffer> stg = nil;
+    if (total && total <= (8u << 20) && !g_up_cpu_used && !atomic_load(&g_mem_level)) {
+        __strong id<MTLBuffer> *slot = &g_up_cpu_slot[g_up_cur_slot];
+        size_t want = 256u << 10; while (want < total) want <<= 1;
+        if (*slot && (*slot).length < want) { defer_obj_release(*slot); *slot = nil; }
+        if (!*slot) { *slot = [g_dev newBufferWithLength:want options:MTLResourceStorageModeShared]; res_add(*slot); }
+        stg = *slot; g_up_cpu_used = 1;
+    }
+    if (!stg) {
+        stg = [g_dev newBufferWithLength:total ? total : 16 options:MTLResourceStorageModeShared];
+        if (!stg) MDIE("failed to allocate CPU upload staging (%zu bytes)", total);
+        res_add(stg); [g_up_keep addObject:stg];
+    }
     size_t off = 0;
     int zb = zblock_on() && t->d.format >= 0x79 && t->d.format <= 0x94; if (zb) { g_zb_ser = t->serial; g_zb_n = (int)MIN(d.mipmapLevelCount, 16u); memset(g_zb, 0, sizeof g_zb); memset(g_zb_tot, 0, sizeof g_zb_tot); }
     uint8_t *raw = NULL; size_t raw_n = 0;   // bcs: one level / layer of deswizzled blocks before decoding
@@ -2349,7 +2325,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
             for (unsigned y = 0; y < layers; y++) {
                 if (nvn_deswizzle(&t->d, l, y, src, raw, pitch)) { RED_ONCE(9, "deswizzle failed format %#x target %d", t->d.format, t->d.target); break; }
                 for (uint32_t zi = 0; zi < z; zi++)
-                    bc_soft_decode(bcs, raw + zi * pitch * rows, pitch, w, h, (uint8_t *)stg.contents + off + zi * dpitch * drows, dpitch);
+                    nvn_bc_decode(bcs, raw + zi * pitch * rows, pitch, w, h, (uint8_t *)stg.contents + off + zi * dpitch * drows, dpitch);
                 up_blit_add(stg, off, dpitch, dpitch * drows, MTLSizeMake(w, h, z), mt, y, l);
                 off += dpitch * drows * z;
             }
@@ -2660,7 +2636,6 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
                 if (pk->spare && pk->spare != nt) defer_obj_release(pk->spare);   // still in use, or of another shape: retired as before
                 if (pk->sparse) sparse_view(pk, t);
                 zb_report(t, pk->sparse ? (unsigned)pk->vbase : 0, "re-upload");
-                if (!pk->sparse) disc_queue(t->mem, t->L.size);
                 pk->spare = old; pk->spare_fence = g_fence + 1; g_ser_gen++; pk->stamp = st; pk->vgen = pk->vseen = vg; pk->span = nvn_dirty_span(t->mem, t->L.size); pk->seen = st; g_pkg_reuploads++; if (dirtycheck() && !pk->sparse) pk->hash = full_hash(t->mem, t->L.size); pkg_edges_take(pk, t); }
             return pk->view ? pk->view : pk->tex;
         }
@@ -2671,7 +2646,6 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
         pk->span = nvn_dirty_span(t->mem, t->L.size);
         pk->seen = pk->stamp; g_pkg_uploads++; if (dirtycheck() && !pk->sparse) pk->hash = full_hash(t->mem, t->L.size);   // "nothing written since" starts at the stamp: a write that faulted during the upload moved "now" past it
         pkg_edges_take(pk, t);
-        if (!pk->sparse) disc_queue(t->mem, t->L.size);
         if (pk->sparse) sparse_view(pk, t);
         zb_report(t, pk->sparse ? (unsigned)pk->vbase : 0, "upload");
         tex_put(t->serial, pk);
@@ -9586,7 +9560,7 @@ static void copy_b2t(const p_copy_b2t *c) {
         if (!stg) { RED_ONCE(85, "buffer→texture copy: no staging buffer for the decoded BC blocks (%zu bytes)", dimg * nz); return; }
         res_add(stg);
         const uint8_t *s = (const uint8_t *)((__bridge id<MTLBuffer>)mb).contents + mo;
-        for (int z = 0; z < nz; z++) bc_soft_decode(bcs, s + (size_t)z * img, row, w, h, (uint8_t *)stg.contents + (size_t)z * dimg, dpitch);
+        for (int z = 0; z < nz; z++) nvn_bc_decode(bcs, s + (size_t)z * img, row, w, h, (uint8_t *)stg.contents + (size_t)z * dimg, dpitch);
         id<MTL4ComputeCommandEncoder> bb = blit();
         if (is3d) enc_b_copy_buffer_texture(bb, stg, 0, dpitch, dimg, MTLSizeMake(w, h, nz), t, 0, level, MTLOriginMake(c->r.xoffset, c->r.yoffset, c->r.zoffset));
         else for (int z = 0; z < nz; z++)
@@ -10205,8 +10179,9 @@ void mtl_exec(const uint8_t *p) {
 // ---------- Present: draw the swapchain texture to the CAMetalLayer; optional screenshot ----------
 static id<MTLRenderPipelineState> g_blit_pso; static MTLPixelFormat g_blit_fmt;
 static id<MTLSamplerState> g_blit_samp;
-static uint64_t g_present_n;
-uint64_t mtl_present_count(void) { return g_present_n; }   // Actual present count (heat attribution DM_HEAT computes the present frame rate)
+static _Atomic uint64_t g_present_n, g_displayed_n, g_displayed_ticket;
+uint64_t mtl_last_displayed_ticket(void) { return atomic_load(&g_displayed_ticket); }
+uint64_t mtl_present_count(void) { return atomic_load(&g_displayed_n); }   // Actual present count (heat attribution DM_HEAT computes the present frame rate)
 void mtl_res_snapshot(mtl_res_count *out) {
     memset(out, 0, sizeof *out);
     out->pso = g_pso.n;
@@ -10877,6 +10852,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     [dr addPresentedHandler:^(id<MTLDrawable> d) {   // Actual presentation time (the time this frame is really put on screen, CACurrentMediaTime base)
         CFTimeInterval tt = d.presentedTime;
         g_pres[pn % PRING] = (pres_ent){pn, tt > 0 ? tt : -1};
+        if (tt > 0) { atomic_fetch_add(&g_displayed_n, 1); atomic_store(&g_displayed_ticket, pn); nvn_frame_metrics_record((uint64_t)(tt * 1e9)); }
     }];
     // Each frame is displayed for at least one present period: when the GPU completion time jitters around a 120 Hz refresh boundary, the paired "25 ms + 8.33 ms" stutter no longer appears
     if (target_ts > 0) [dr present];

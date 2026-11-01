@@ -1,0 +1,49 @@
+name: A16 validation
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: a16-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  portable:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+      - run: python -m pip install texture2ddecoder
+      - name: Exact BC upload bytes, independent ASTC decode, odd mips and pitches
+        run: python -m unittest -v dm/gfx/tests/test_bc_soft.py
+      - name: Presentation statistics under ASan and UBSan
+        run: |
+          clang -O2 -g -pthread -fsanitize=address,undefined dm/gfx/tests/t_frame_metrics.c dm/gfx/nvn/nvn_frame_metrics.c -o /tmp/frame-metrics
+          /tmp/frame-metrics
+  apple:
+    runs-on: xcode-27
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Report installed toolchain fingerprints
+        run: |
+          xcodebuild -version
+          xcrun -sdk iphoneos metal --version
+          python3 dm/gfx/tools/dmsh_chain.py --check-tools || true
+      - name: Actual persistent cache, owned writes and memory pressure
+        run: |
+          clang -O2 -g -fobjc-arc -fblocks -fsanitize=address,undefined dm/gfx/tex/tests/t_bc_cache.m dm/gfx/tex/bc_cache.m dm/gfx/tex/bc_soft.c -framework Foundation -o /tmp/bc-cache
+          /tmp/bc-cache
+      - name: Presentation statistics under ThreadSanitizer
+        run: |
+          clang -O1 -g -pthread -fsanitize=thread dm/gfx/tests/t_frame_metrics.c dm/gfx/nvn/nvn_frame_metrics.c -o /tmp/frame-metrics
+          /tmp/frame-metrics

@@ -14,6 +14,7 @@ uint32_t bc_soft_target(uint32_t mtl_pf, int *bytes_per_pixel);
 // Rows of the decoded level in the staging layout: ceil(h / 4) * 4 pixel rows, or ceil(h / 4) block rows for ASTC 4x4 (nvn_bc_astc)
 size_t bc_soft_rows(uint32_t mtl_pf, uint32_t h);
 extern int nvn_bc_astc;   // 1 (the default) = BC1 / 2 / 3 / 7 become ASTC 4x4 and BC6H unsigned RG11B10F; 0 = RGBA8 / RGBA16F
+extern int nvn_bc_workers;   // 1..4, default 2; initialized once before uploads, never changed during a decode
 
 // Decode a w × h region of BC blocks (src: rows of 4 × 4 blocks, src_pitch bytes from one block row to the next) into dst (dst_pitch bytes per pixel row).
 // dst must hold whole blocks: ceil(w / 4) * 4 pixels per row and ceil(h / 4) * 4 rows. Returns 0, or -1 when mtl_pf is no BC format

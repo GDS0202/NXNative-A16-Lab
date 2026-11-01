@@ -12,6 +12,7 @@
 
 int nvn_bc_soft;
 int nvn_bc_astc = 1;   // BC1 / BC2 / BC3 / BC7 into ASTC 4x4 instead of RGBA8, BC6H unsigned into RG11B10F instead of RGBA16F (DM_BC_ASTC=0: the uncompressed formats)
+int nvn_bc_workers = 2;   // Bounded upload workers; set before uploads start (DM_BC_WORKERS). The game and driver need CPU time too.
 
 enum { BC1 = 130, BC1_S = 131, BC2 = 132, BC2_S = 133, BC3 = 134, BC3_S = 135, BC4_U = 140, BC4_S = 141, BC5_U = 142, BC5_S = 143, BC6H_S = 150, BC6H_U = 151, BC7 = 152, BC7_S = 153 };
 enum { R8U = 10, R8S = 12, RG8U = 30, RG8S = 32, RGBA8 = 70, RGBA8_S = 71, RG11B10F = 92, RGBA16F = 115, ASTC4_S = 186, ASTC4 = 204 };
@@ -256,7 +257,6 @@ int bc_soft_block(uint32_t pf, const uint8_t *p, uint8_t *out, size_t pitch) {
 // Block mode (ASTC spec "Block mode", bits 10:0): bits 1:0 and 4 give the weight range, 3:2 = 00 with B (8:7) = 0 and A (6:5) = 2 a 4x4 grid; 0x42 = 2-bit weights, 0x53 = 3-bit.
 // Endpoint values from bit 17 up, v0 v1 ... = e0.r e1.r e0.g e1.g e0.b e1.b (e0.a e1.a); weights from bit 127 down, texel 0 first, each weight's bits LSB first.
 // The decoder swaps to blue contraction when e1's RGB sum is below e0's: the endpoints are ordered so it never does (weights mirrored, the weight tables are symmetric)
-static void put_bits(uint8_t *o, int pos, uint32_t v, int n) { for (int i = 0; i < n; i++) if (v >> i & 1) o[(pos + i) >> 3] |= (uint8_t)(1u << ((pos + i) & 7)); }
 static void astc_write(uint8_t *o, int nc, int e[2][4], const uint8_t *wi, int wbits) {
     uint8_t m[16];
     if (e[1][0] + e[1][1] + e[1][2] < e[0][0] + e[0][1] + e[0][2]) {
@@ -264,11 +264,21 @@ static void astc_write(uint8_t *o, int nc, int e[2][4], const uint8_t *wi, int w
         for (int i = 0; i < 16; i++) m[i] = (uint8_t)((1 << wbits) - 1 - wi[i]);
         wi = m;
     }
-    memset(o, 0, 16);
-    put_bits(o, 0, wbits == 2 ? 0x42 : 0x53, 11); put_bits(o, 13, nc == 3 ? 8 : 12, 4);   // bits 12:11 = 0: one partition
-    for (int c = 0; c < nc; c++) { put_bits(o, 17 + 16 * c, (uint32_t)e[0][c], 8); put_bits(o, 25 + 16 * c, (uint32_t)e[1][c], 8); }
-    for (int i = 0; i < 16; i++)
-        for (int k = 0; k < wbits; k++) if (wi[i] >> k & 1) { int b = 127 - (i * wbits + k); o[b >> 3] |= (uint8_t)(1u << (b & 7)); }
+    // The two layouts above have byte endpoints and fixed-width weights. Pack
+    // whole fields instead of branching on every bit. Keep the exact original
+    // output (including the blue-contraction ordering), not a faster quality mode.
+    uint64_t lo = (wbits == 2 ? 0x42u : 0x53u) | (uint64_t)(nc == 3 ? 8 : 12) << 13;
+    lo |= (uint64_t)e[0][0] << 17 | (uint64_t)e[1][0] << 25;
+    lo |= (uint64_t)e[0][1] << 33 | (uint64_t)e[1][1] << 41;
+    lo |= (uint64_t)e[0][2] << 49 | (uint64_t)e[1][2] << 57;
+    uint64_t hi = (uint64_t)e[1][2] >> 7;
+    if (nc == 4) hi |= (uint64_t)e[0][3] << 1 | (uint64_t)e[1][3] << 9;
+    static const uint8_t reverse2[4] = {0, 2, 1, 3}, reverse3[8] = {0, 4, 2, 6, 1, 5, 3, 7};
+    const uint8_t *reverse = wbits == 2 ? reverse2 : reverse3;
+    for (int i = 0; i < 16; i++) hi |= (uint64_t)reverse[wi[i]] << (64 - wbits * (i + 1));
+    // Apple arm64 and the Windows host are little endian. memcpy permits an
+    // unaligned destination (mip offsets need not be eight-byte aligned).
+    memcpy(o, &lo, 8); memcpy(o + 8, &hi, 8);
 }
 static int clamp255(float v) { int i = (int)(v + 0.5f); return i < 0 ? 0 : i > 255 ? 255 : i; }
 // px: 16 texels RGBA8, row-major. Fit: the principal axis (power iteration from the bounding box diagonal), endpoints at the extreme projections, nearest weights, then one
@@ -354,12 +364,19 @@ static void decode_rows(uint32_t pf, const uint8_t *src, size_t src_pitch, uint3
 int bc_soft_decode(uint32_t pf, const uint8_t *src, size_t src_pitch, uint32_t w, uint32_t h, uint8_t *dst, size_t dst_pitch) {
     int bpp; if (!bc_soft_target(pf, &bpp)) return -1;
     size_t bsz = (pf == BC1 || pf == BC1_S || pf == BC4_U || pf == BC4_S) ? 8 : 16;
-    uint32_t bw = (w + 3) / 4, bh = (h + 3) / 4;
+    uint32_t bw = w / 4 + (w % 4 != 0), bh = h / 4 + (h % 4 != 0);
+    if (!w || !h) return 0;
+    size_t row = (size_t)bw * 4 * bpp;
+    if (!src || !dst || src_pitch < (size_t)bw * bsz || dst_pitch < row) return -1;
 #ifdef __APPLE__
-    if ((uint64_t)bw * bh >= 1024) {   // big levels on every core: block rows in bands of 8 (a 2048² level is 512 rows; the decode is otherwise the upload's longest step)
-        uint32_t bands = (bh + 7) / 8;
-        dispatch_apply(bands, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^(size_t i) {
-            uint32_t a = (uint32_t)i * 8, b = a + 8 < bh ? a + 8 : bh;
+    if ((uint64_t)bw * bh >= 4096 && nvn_bc_workers > 1) {
+        // A16 has two performance cores. Unbounded dispatch_apply used all six
+        // cores while the guest and encoder were still running. At most four
+        // participants, default two, with disjoint contiguous row ranges.
+        uint32_t workers = (uint32_t)(nvn_bc_workers > 4 ? 4 : nvn_bc_workers);
+        if (workers > bh) workers = bh;
+        dispatch_apply(workers, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^(size_t i) {
+            uint32_t a = (uint32_t)((uint64_t)bh * i / workers), b = (uint32_t)((uint64_t)bh * (i + 1) / workers);
             decode_rows(pf, src, src_pitch, bw, a, b, dst, dst_pitch, bpp, bsz);
         });
         return 0;
