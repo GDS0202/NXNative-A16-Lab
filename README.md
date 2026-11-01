@@ -17,3 +17,6 @@ Based on [zenvyzenshiro/NXNativeWindows](https://github.com/zenvyzenshiro/NXNati
 and [seedds/nxnative](https://github.com/seedds/nxnative), with their history and
 MIT license preserved. See [the audit](docs/a16.md) for the other projects
 reviewed and for features intentionally not enabled without evidence.
+
+The cloud builder uses [Xcode](https://developer.apple.com/xcode/) 27.1.
+It is installed on the build runner; your Mac does not need Xcode.

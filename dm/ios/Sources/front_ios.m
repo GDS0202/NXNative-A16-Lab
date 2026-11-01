@@ -63,8 +63,19 @@ static void launcher_done(void) { [g_root startGame]; }
     self.view.backgroundColor = UIColor.blackColor;
     front_ios_power_watch();
     if (!front_ios_boot_ok()) {   // No game files: show a hint and do not start the host
-        void nxw_show_data_help(UIViewController *root);   // win/ios/DataHelp.m: where a split build's data folder goes, step by step
-        nxw_show_data_help(self); return;
+#ifdef DM_DATA_IMPORT_UI
+        void nxw_show_data_help(UIViewController *root);
+        nxw_show_data_help(self);
+#else
+        UITextView *help = [[UITextView alloc] initWithFrame:UIEdgeInsetsInsetRect(self.view.bounds, UIEdgeInsetsMake(40, 40, 40, 40))];
+        help.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        help.editable = NO; help.backgroundColor = UIColor.blackColor; help.textColor = UIColor.whiteColor;
+        help.font = [UIFont preferredFontForTextStyle:UIFontTextStyleTitle3];
+        const char *why = front_ios_boot_message();
+        help.text = [NSString stringWithFormat:@"Game files required\n\n%@\n\nIn Files, copy this build's romfs.img into this app's Documents folder. Then close and reopen the app. The image and the app must come from the same game build.", why ? @(why) : @"No complete game data image was found."];
+        [self.view addSubview:help];
+#endif
+        return;
     }
     front_ios_audio_watch();
 }

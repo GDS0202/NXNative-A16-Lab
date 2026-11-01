@@ -56,6 +56,7 @@ def main():
     BuildError = up.BuildError
 
     extra = [str(p) for p in (tc.llvm_bin(),) if p] + [str(tc.tool_on_path(t).parent) for t in ('spirv-cross', 'zstd', 'glslangValidator') if tc.tool_on_path(t)]
+    os.environ['DMSH_TOOLCHAIN'] = 'windows'   # actual Windows/Wine compiler and native SPIRV-Cross fingerprints
     up.TOOL_PATHS = extra + ([str(Path(os.environ.get('ProgramFiles', r'C:\Program Files')) / 'dotnet')] if tc.WINDOWS else up.TOOL_PATHS)   # upstream's list has ~/.dotnet
     # the shader chain takes spirv-cross from SPIRV_CROSS, else the repository's Mach-O build (dm/gfx/tools/dmsh_chain.py): here the native one the toolchain names
     sc = tc.tool_on_path('spirv-cross')
