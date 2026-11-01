@@ -4,6 +4,7 @@ Experimental BOTW Switch 1.9.0 work for iPad A16 / 6 GB. **A16 BOTW gameplay
 validation is pending. Stable 60 real fps is a target, not a promised result.**
 
 [Changes, audit and measurement plan](docs/a16.md) ·
+[Cloud IPA build without local Xcode](docs/cloud-build.md) ·
 [Original NXNative guide](README.nxnative.md) ·
 [Inherited Windows/Linux builder](win/README.md)
 
@@ -26,5 +27,6 @@ It is installed on the build runner; your Mac does not need Xcode.
 Build from your own base game and 1.9.0 update. The private cloud builder
 will produce an unsigned IPA and a matching `romfs.img`. Sign/install the
 IPA with your sideloading tool, then copy `romfs.img` to its Documents folder.
-The launcher exposes settings before Play. See [the retained guide](README.nxnative.md)
+The launcher exposes settings before Play. In Files, the visible app folder
+is already its Documents root; put the image directly there. See [the retained guide](README.nxnative.md)
 for device requirements and signing; its gallery is upstream evidence, not A16 validation.
