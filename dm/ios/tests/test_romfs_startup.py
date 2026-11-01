@@ -30,7 +30,7 @@ class Startup(unittest.TestCase):
                           '#define NSSearchPathForDirectoriesInDomains(a,b,c) @[fixture_doc]\n#define NSTemporaryDirectory() fixture_tmp\n' + locator +
                           '\nint main(int argc, char **argv) { @autoreleasepool { if (argc < 3) return 2;\n'
                           'fixture_doc = @(argv[1]); fixture_tmp = @(argv[2]); fixture_bundle = argc > 3 ? @(argv[3]) : @"/nonexistent-fixture"; NSString *p = romfs_locate();\n'
-                          'if (!p) return 1; puts(p.fileSystemRepresentation); return 0; }}\n')
+                          'if (!p) return 1; if (argc > 4) p = data_dir(@(argv[4])); puts(p.fileSystemRepresentation); return 0; }}\n')
         cls.locator = root / 'locator'
         subprocess.run(['clang', '-fobjc-arc', '-Wall', '-Werror', '-I', str(REPO / 'dm/host'),
                         str(source), '-framework', 'Foundation', '-o', str(cls.locator)], check=True)
@@ -91,6 +91,18 @@ class Startup(unittest.TestCase):
             (bundle / 'romfs.id').unlink()   # the default build has no identity: any complete image
             shutil.copy(root / 'other.img', doc / 'romfs.img')
             self.assertEqual(locate().stdout.strip(), str(doc / 'romfs.img'))
+
+
+    def test_split_root_supplies_shaders_but_empty_folder_falls_back(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); doc = root / 'Documents'; game = doc / 'game-data'
+            (game / 'romfs').mkdir(parents=True); (game / 'romfs/marker').write_text('fixture')
+            (game / 'msl').mkdir(); shader = game / 'msl/library'; shader.write_text('fixture')
+            tmp, bundle = root / 'temp', root / 'bundle'; tmp.mkdir(); bundle.mkdir()
+            command = [str(self.locator), str(doc), str(tmp), str(bundle), 'msl']
+            self.assertEqual(subprocess.check_output(command, text=True).strip(), str(game / 'msl'))
+            shader.unlink()
+            self.assertEqual(subprocess.check_output(command, text=True).strip(), str(bundle / 'msl'))
 
 
 if __name__ == '__main__': unittest.main()

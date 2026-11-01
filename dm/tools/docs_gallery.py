@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Writes the games gallery in README.md (between its gallery markers) from docs/images/gallery.tsv: one cell per row of the table, three to a row, in the table's order.
+# Writes the retained upstream games gallery in README.nxnative.md (between its gallery markers) from docs/images/gallery.tsv: one cell per row of the table, three to a row, in the table's order.
 # The table is the source: a new game is a row in it (usually at the end), so two pull requests that each add a game change one line each instead of moving every cell after
 # the first one; .gitattributes merges the table with the union driver. Columns: image (a file in docs/images), name (the caption and the image's alt text), note (the small
 # line under it, in small print like the caption: the IPA's size, then " · " and a remark if any; omit when the size is unknown) and, optionally, the base game's title ID, which links to its game note.
@@ -9,7 +9,7 @@ import html, pathlib, re, sys
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 TABLE = REPO / 'docs' / 'images' / 'gallery.tsv'
-OUT = REPO / 'README.md'
+OUT = REPO / 'README.nxnative.md'
 BEGIN = '<!-- gallery: written by dm/tools/docs_gallery.py from docs/images/gallery.tsv; change the table, then run it -->'
 END = '<!-- end of gallery -->'
 PER_ROW = 3

@@ -349,3 +349,10 @@ The guest address space, heaps, pools, virtual address memory and the allocators
 - **Fix:** `mtl_read_texels` encloses texture resolution, readback encoding, the GPU wait and the CPU copy in its own `@autoreleasepool`. The guest-memory path needs no Metal objects.
 - **Found on:** [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md), measured upstream in MacNativeGames commit `635fb31` and ported in [PR #195](https://github.com/seedds/nxnative/pull/195): about 130 readbacks a second retained 3.7 GB of GPU memory after 30 minutes. Those game measurements have not been repeated here.
 - **Check:** `make -C dm/gfx/tests GAME=010015100B514000 check_t_readback` checks literal GPU and CPU readback pixels and observes the real readback buffer through a weak reference while the caller's outer pool remains open. Removing only the local pool leaves that buffer alive and fails the lifetime check.
+
+### Guest texture data discarded after an upload
+
+- **Symptom:** a partial CPU texture update can re-upload zeros or stale texels after memory pressure.
+- **Cause:** the Windows base used `MADV_FREE_REUSABLE` on the guest's packaged texture pages after the GPU upload fence. That fence proves upload completion, not that guest reads or partial updates are finished forever.
+- **Fix:** preserve guest backing. The A16 fork removes discard even under the critical memory guard; verified ASTC conversion caching and bounded staging address host-side cost without destroying guest bytes. Peak device memory still needs measurement.
+- **Found on:** code audit of NXNativeWindows `269d61f`, targeted by [BOTW A16 work](../a16.md). This is a demonstrated unsafe lifetime, not a claim that it caused a particular device screenshot.

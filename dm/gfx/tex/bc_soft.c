@@ -35,7 +35,7 @@ uint32_t bc_soft_target(uint32_t pf, int *bpp) {
     if (bpp) *bpp = b;
     return o;
 }
-size_t bc_soft_rows(uint32_t pf, uint32_t h) { uint32_t o = bc_soft_target(pf, NULL); return o == ASTC4 || o == ASTC4_S ? (h + 3) / 4 : (size_t)(h + 3) / 4 * 4; }
+size_t bc_soft_rows(uint32_t pf, uint32_t h) { uint32_t o = bc_soft_target(pf, NULL); return o == ASTC4 || o == ASTC4_S ? ((size_t)h + 3) / 4 : ((size_t)h + 3) / 4 * 4; }
 
 // ---- bit reading, LSB first over 128 bits ----
 typedef struct { uint64_t lo, hi; int pos; } bits_t;

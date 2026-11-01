@@ -34,6 +34,16 @@ int main(void) { @autoreleasepool {
     nvn_bc_cache_pressure(2); uint64_t before = nvn_bc_cache_stats().writes;
     assert(!nvn_bc_decode(135, src, 2048, 512, 512, out, 2048)); nvn_bc_cache_wait();
     assert(nvn_bc_cache_stats().writes == before); nvn_bc_cache_pressure(0);
+    // Sparse synthetic files exercise the disk budget without writing game data.
+    for (unsigned i = 0; i < 18; i++) {
+        NSString *fake = [dir stringByAppendingPathComponent:[NSString stringWithFormat:@"budget-%u.astc", i]];
+        FILE *f = fopen(fake.fileSystemRepresentation, "wb"); assert(f); assert(!ftruncate(fileno(f), 16u << 20)); fclose(f);
+    }
+    src[92] ^= 7; assert(!nvn_bc_decode(134, src, 2048, 512, 512, out, 2048)); nvn_bc_cache_wait();
+    uint64_t total = 0;
+    for (NSString *file in [NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil])
+        total += [[NSFileManager.defaultManager attributesOfItemAtPath:[dir stringByAppendingPathComponent:file] error:nil][NSFileSize] unsignedLongLongValue];
+    assert(total <= (256u << 20));
     free(src); free(out); free(ref); [NSFileManager.defaultManager removeItemAtPath:dir error:nil];
     puts("BC cache: cold/warm, content keys, corruption, truncation, owned writes, pressure PASS");
 } return 0; }

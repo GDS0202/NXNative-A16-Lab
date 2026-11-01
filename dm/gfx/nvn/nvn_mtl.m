@@ -34,6 +34,7 @@
 #include "nvn_primitive.h"
 #include "nvn_timestamp.h"
 #include "nvn_frame_metrics.h"
+#include "nvn_warm_budget.h"
 #include "dmsh_chain.h"   // DMSH_CHAIN: the translation chain version of the B shader library expected by this source tree, one for every game (beside this file, tools/dmsh_chain.py --header)
 #include "game_profile.h"   // game profile constants (profile id, the profile's switches)
 // Texture slot table per stage: 0-127 the combined handles (nvnCommandBufferBindTexture), 128-255 the separate texture binds (NVN_SEPTEX_SLOT0, nvn_obj.h)
@@ -6129,9 +6130,10 @@ static NSString *warm_key(const char *s, size_t n) {
 // The prewarm runs the lines of its lists as tasks: a shader (S), a compute pipeline (C), or every render pipeline (R) of one shader pair. The pipelines of a pair share their
 // bases, so one worker builds them one after the other and no two workers compile the same base. The tasks keep the lists' order (a pair at its first line).
 // Shaders go into one dictionary all workers share (a key two workers load at once is kept once; a shader that failed to load is kept as NSNull and not tried again)
-@interface WarmTask : NSObject { @public int kind, stage; NSString *key, *vkey, *fkey; NSMutableArray<NSData *> *rs; } @end
+@interface WarmTask : NSObject { @public int kind, stage, learned; NSString *key, *vkey, *fkey; NSMutableArray<NSData *> *rs; } @end
 @implementation WarmTask @end
 static NSMutableDictionary *g_warm_dict; static os_unfair_lock g_warm_dict_lock = OS_UNFAIR_LOCK_INIT;
+static _Atomic uint64_t g_warm_budget_skipped;
 static _Atomic long g_warm_done;   // lines done (the prepare screen's count)
 // A prewarm list may name shaders of another version of the game: the bundled list of the version the profile was brought up on, packed with another version (the NSP script's
 // derived profile: Hollow Knight: Silksong's 1.0.30000 list named 16 shaders its base game 1.0.27776 does not have), or a device's pso_user.tsv kept across a game update.
@@ -6167,14 +6169,18 @@ static NSArray<WarmTask *> *warm_parse(NSArray<NSString *> *paths, long *lines) 
         if (!txt) { MLOG("[RED] cannot read prewarm list: %s", path.UTF8String); continue; }
         { unsigned long nl = 0; for (NSString *l in [txt componentsSeparatedByString:@"\n"]) nl += l.length && ![l hasPrefix:@"#"];
           MLOG("pipeline prewarm list %s: %lu lines", path.UTF8String, nl); }   // Diagnostics: how many lines each manifest gave (when a device warms up 0, shows which one was missing)
-        for (NSString *line in [txt componentsSeparatedByString:@"\n"]) {
+        int learned = [path isEqualToString:pso_user_path()];
+        const char *le = getenv("DM_PSO_USER_WARM_LIMIT"); int limit = le ? MAX(0, MIN(2048, atoi(le))) : 1024;
+        NSArray<NSString *> *records = learned ? nvn_warm_recent(txt, (NSUInteger)limit) : [txt componentsSeparatedByString:@"\n"];
+        if (learned) MLOG("pipeline prewarm: selected at most %d recent learned records (%lu selected)", limit, (unsigned long)records.count);
+        for (NSString *line in records) {
             if (!line.length || [line hasPrefix:@"#"] || [seen containsObject:line]) continue;
             [seen addObject:line];
             NSArray<NSString *> *c = [line componentsSeparatedByString:@"\t"];
             WarmTask *t = nil;
             if (([c[0] isEqualToString:@"S"] && c.count >= 3) || ([c[0] isEqualToString:@"C"] && c.count >= 2)) {
                 if (!c[1].length || warm_stale(c[1], stale)) continue;
-                t = [WarmTask new]; t->kind = [c[0] isEqualToString:@"S"] ? 0 : 2; t->key = c[1]; t->stage = t->kind ? 5 : c[2].intValue; [tasks addObject:t];
+                t = [WarmTask new]; t->learned = learned; t->kind = [c[0] isEqualToString:@"S"] ? 0 : 2; t->key = c[1]; t->stage = t->kind ? 5 : c[2].intValue; [tasks addObject:t];
             } else if ([c[0] isEqualToString:@"R"] && c.count >= 2) {
                 pso_skey sk; if (pso_skey_parse(c[1].UTF8String, &sk)) continue;
                 NSData *kd = [NSData dataWithBytes:&sk length:sizeof sk]; if ([seen_k containsObject:kd]) continue;
@@ -6183,7 +6189,7 @@ static NSArray<WarmTask *> *warm_parse(NSArray<NSString *> *paths, long *lines) 
                 if (!vkey.length || warm_stale(vkey, stale) || (fkey.length && warm_stale(fkey, stale))) continue;
                 NSString *pk = [NSString stringWithFormat:@"%@|%@", vkey, fkey];
                 t = pairs[pk];
-                if (!t) { t = [WarmTask new]; t->kind = 1; t->vkey = vkey; t->fkey = fkey; t->rs = [NSMutableArray array]; pairs[pk] = t; [tasks addObject:t]; }
+                if (!t) { t = [WarmTask new]; t->learned = learned; t->kind = 1; t->vkey = vkey; t->fkey = fkey; t->rs = [NSMutableArray array]; pairs[pk] = t; [tasks addObject:t]; }
                 [t->rs addObject:kd];
             } else continue;
             n++;
@@ -6193,6 +6199,13 @@ static NSArray<WarmTask *> *warm_parse(NSArray<NSString *> *paths, long *lines) 
 }
 static void warm_task(WarmTask *t) {
     @autoreleasepool {
+#if TARGET_OS_IPHONE
+        size_t left = t->learned ? os_proc_available_memory() : 0;
+        if (left && left < (512u << 20)) {
+            uint64_t n = t->kind == 1 ? t->rs.count : 1;
+            g_warm_done += n; g_warm_budget_skipped += n; return;
+        }
+#endif
         if (t->kind == 0) {
             NvShader *sh = warm_shader(t->key, t->stage);
             if (sh) { WarmItem *item = [WarmItem new]; item->kind = 0; item->key = t->key; item->shader = sh; warm_enqueue(item); g_warm_shaders++; }
@@ -6226,6 +6239,7 @@ static void warm_task(WarmTask *t) {
     }
 }
 static void warm_finish(void) {
+    if (g_warm_budget_skipped) MLOG("pipeline prewarm: %llu optional learned records left to demand under memory pressure", (unsigned long long)g_warm_budget_skipped);
     MLOG("pipeline prewarm done: shaders %llu / render pipelines %llu (specialized fragment skipped %llu) / compute pipelines %llu, background time %.1f ms; shader keys not in the shader map (another game version) %llu",
          (unsigned long long)g_warm_shaders, (unsigned long long)g_warm_rps, (unsigned long long)g_warm_skip_fz, (unsigned long long)g_warm_cps, (bp_now() - g_warm_t0) / 1e6, (unsigned long long)g_warm_skip_stale);
     if (g_comp4) MLOG("pipeline bases so far: %llu compiled, %llu from the archive, %llu reused (%.1f ms for the bases); %llu specializations, %llu pipelines without a base (MTLDevice)",
@@ -6316,11 +6330,11 @@ static void warm_start(void) {
         NSString *seed = [g_shmap_path.stringByDeletingLastPathComponent stringByAppendingPathComponent:@"pso_manifest.tsv"];
         NSMutableArray<NSString *> *all = [NSMutableArray arrayWithObject:seed];
         NSString *user = pso_user_path();
-        // A device with 6 GB or less (DM_PSO_USER_WARM=1 / 0 overrides): the device's own list is not prewarmed. It grows with every new pipeline the game draws, all of it was built
-        // before the first frame ("Preparing shaders", longer at each start) and kept for the run; those pipelines come from the system's Metal cache on disk when first drawn instead
+        // Do not discard the learned list just because the device has 6 GB.
+        // Select a bounded tail in warm_parse, then stop optional tasks when
+        // headroom falls below 512 MiB. The seed list remains mandatory.
         const char *uw = getenv("DM_PSO_USER_WARM");
-        int skip_user = uw ? !strcmp(uw, "0") : NSProcessInfo.processInfo.physicalMemory <= 6.5 * 1073741824.0;
-        if (skip_user && user) { MLOG("pipeline prewarm: this device's list %s is not prewarmed (%s): its pipelines are made when first drawn", user.UTF8String, uw ? "DM_PSO_USER_WARM=0" : "6 GB device"); user = nil; }
+        if (uw && !strcmp(uw, "0")) user = nil;
         if (user && [NSFileManager.defaultManager fileExistsAtPath:user]) [all addObject:user];
         else MLOG("pipeline prewarm: this device's user list %s%s", user ? "does not exist yet: " : "has no path (neither DM_PSO_USER nor DM_SAVE is set)", user ? user.UTF8String : "");
         if (![NSFileManager.defaultManager fileExistsAtPath:seed]) { MLOG("[RED] pipeline prewarm: seed list does not exist: %s", seed.UTF8String); return; }

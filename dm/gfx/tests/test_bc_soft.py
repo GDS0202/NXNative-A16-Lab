@@ -79,6 +79,25 @@ class BcUpload(unittest.TestCase):
         self.assertEqual(self.lib.bc_soft_decode(130, bytes(8), 8, 4, 4, dst, 15), -1)
         self.assertEqual(self.lib.bc_soft_decode(999, bytes(8), 8, 4, 4, dst, 16), -1)
 
+    def test_bcn_channels_against_pillow(self):
+        from PIL import Image
+        rnd = random.Random(7)
+        for pf, n, fmt, mode, size, bpp, tol in ((130, 1, 'BC1', 'RGBA', 8, 4, 2),
+                (132, 2, 'BC2', 'RGBA', 16, 4, 2), (134, 3, 'BC3', 'RGBA', 16, 4, 2), (140, 4, 'BC4', 'L', 8, 1, 1)):
+            for _ in range(300):
+                b = bytes(rnd.getrandbits(8) for _ in range(size))
+                out = ctypes.create_string_buffer(16 * bpp)
+                self.lib.bc_soft_block(pf, b, out, 4 * bpp)
+                ref = Image.frombytes(mode, (4, 4), b, 'bcn', (n, fmt)).tobytes()
+                self.assertLessEqual(max(abs(x-y) for x, y in zip(out.raw, ref)), tol, fmt)
+        for mode in range(8):
+            for _ in range(100):
+                b = bytearray(rnd.getrandbits(8) for _ in range(16))
+                b[0] = (b[0] & ~((1 << (mode + 1)) - 1) & 255) | (1 << mode)
+                out = ctypes.create_string_buffer(64); self.lib.bc_soft_block(152, bytes(b), out, 16)
+                ref = Image.frombytes('RGBA', (4, 4), bytes(b), 'bcn', (7, 'BC7')).tobytes()
+                self.assertEqual(out.raw, ref)
+
     def test_bc1_astc_with_independent_decoder(self):
         import texture2ddecoder
         rnd = random.Random(29)

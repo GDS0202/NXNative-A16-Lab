@@ -20,3 +20,11 @@ reviewed and for features intentionally not enabled without evidence.
 
 The cloud builder uses [Xcode](https://developer.apple.com/xcode/) 27.1.
 It is installed on the build runner; your Mac does not need Xcode.
+
+## How to play
+
+Build from your own base game and 1.9.0 update. The private cloud builder
+will produce an unsigned IPA and a matching `romfs.img`. Sign/install the
+IPA with your sideloading tool, then copy `romfs.img` to its Documents folder.
+The launcher exposes settings before Play. See [the retained guide](README.nxnative.md)
+for device requirements and signing; its gallery is upstream evidence, not A16 validation.

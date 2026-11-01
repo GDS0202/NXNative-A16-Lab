@@ -228,3 +228,13 @@ General host changes first needed here; each applies to every game:
 - `game.tsv` still says "In bring-up", and its memory comment "until measured".
 - 05's `DM_PROBE_POLL` paragraph cites `PlacementMgr` in `main+0x5aaac0` as the one thread in guest code "for that flag" without naming the game; `PlacementMgr` is this game's.
 - Motion on iOS (a controller's gyro, and the phone's own while no controller supplies fresh samples) has not been tested on a device. Source arbitration, concurrent startup and upright orientation were corrected during review and are covered by unit tests; see [Live controller motion](../../../docs/reference/services.md#live-controller-motion). Motion shrines from issue #389 still need a device gameplay check.
+
+## A16 fork work
+
+This fork's [A16 audit and acceptance route](../../../docs/a16.md) distinguishes
+inherited device reports from new source checks. It keeps guest texture backing
+([discard lifetime](../../../docs/reference/memory.md#guest-texture-data-discarded-after-an-upload)),
+adds [bounded cached BC conversion](../../../docs/reference/rendering.md#bounded-bc-conversion-and-persistent-astc-uploads),
+and defaults to handheld 1280x720 internally and a separate 720p output. There
+is no new A16 BOTW gameplay measurement. The cloud builder requires the exact
+registered 1.9.0 module builds instead of silently deriving a different profile.

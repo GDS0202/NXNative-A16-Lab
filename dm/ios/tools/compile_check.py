@@ -31,6 +31,8 @@ dirs = list(dict.fromkeys(os.path.dirname(s) for s in srcs))
 flags = ['-arch', 'arm64', '-miphoneos-version-min=26.0', '-mcpu=apple-a16', '-fobjc-arc', '-O1', '-w'] + defs + [f'-I{d}' for d in incs + dirs]
 def one(s):
     c = ['xcrun', '-sdk', 'iphoneos', 'clang'] + flags + (['-Dmain=dm_main'] if s == os.path.join(host, 'main.c') else []) + ['-c', s, '-o', '/dev/null']
+    if os.path.basename(s) == 'bc_soft.c': c[4:4] = ['-O2', '-ffp-contract=off']
+    elif os.path.basename(s) == 'nvn_deswizzle.c': c[4:4] = ['-O2']
     if s.endswith('.c'): c[4:4] = ['-std=gnu11']
     p = subprocess.run(c, capture_output=True, text=True)
     return s, p.returncode, p.stderr

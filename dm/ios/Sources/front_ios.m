@@ -44,7 +44,14 @@ static int g_hud;   // DM_METAL_HUD: the counter grows into a HUD (front_ios_fps
 - (void)layoutSubviews {
     [super layoutSubviews];
     CAMetalLayer *l = (CAMetalLayer *)self.layer;
-    l.drawableSize = CGSizeMake(self.bounds.size.width * l.contentsScale, self.bounds.size.height * l.contentsScale);
+    CGSize size = CGSizeMake(self.bounds.size.width * l.contentsScale, self.bounds.size.height * l.contentsScale);
+    const char *e = getenv("DM_OUTPUT_HEIGHT"); int cap = e ? atoi(e) : 720;
+    // The guest's internal render scale is separate. Avoid allocating a Retina
+    // drawable ring just to stretch a 720p game. UIKit keeps its native scale.
+    if ((cap == 720 || cap == 900 || cap == 1080) && size.height > cap) {
+        size.width = MAX(1, round(size.width * cap / size.height)); size.height = cap;
+    }
+    if (size.width > 0 && size.height > 0) l.drawableSize = size;
 }
 @end
 

@@ -1,0 +1,102 @@
+# Copy this workflow into a PRIVATE repository as .github/workflows/build.yml.
+# It intentionally has no push/PR trigger and never uses public game artifacts.
+name: Private BOTW A16 IPA
+on:
+  workflow_dispatch:
+    inputs:
+      input_tag:
+        description: Draft release tag uploaded by cloud_ipa.py
+        required: true
+        type: string
+      source_revision:
+        description: Reviewed full commit SHA in GDS0202/NXNative-A16-Lab
+        required: true
+        type: string
+permissions:
+  contents: write # own private draft input/output assets only
+concurrency:
+  group: private-botw
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.event.repository.private
+    runs-on: xcode-27
+    timeout-minutes: 180
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+      SOURCE_REVISION: ${{ inputs.source_revision }}
+      INPUT_TAG: ${{ inputs.input_tag }}
+      GH_TOKEN: ${{ github.token }}
+      J: '2'
+    steps:
+      - name: Validate source revision
+        run: |
+          python3 - <<'PY'
+          import os,re
+          if not re.fullmatch('[0-9a-f]{40}', os.environ['SOURCE_REVISION']):
+              raise SystemExit('Use a full reviewed source commit SHA')
+          PY
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: GDS0202/NXNative-A16-Lab
+          ref: ${{ inputs.source_revision }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Dependencies and exact compiler check
+        run: |
+          brew install xcodegen zstd glslang
+          python -m pip install lz4 capstone fonttools
+          python source/dm/gfx/tools/dmsh_chain.py --check-tools
+      - name: Reclaim unused Xcode versions on this disposable runner
+        run: |
+          python - <<'PY'
+          import os,shutil,subprocess
+          from pathlib import Path
+          if os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted':
+              raise SystemExit('Cleanup is allowed only on the disposable GitHub-hosted runner')
+          selected=Path(os.environ['DEVELOPER_DIR']).resolve().parents[1]
+          if selected.parent != Path('/Applications') or not selected.name.startswith('Xcode_'):
+              raise SystemExit('Unexpected selected Xcode; nothing removed')
+          if shutil.disk_usage(os.environ['RUNNER_TEMP']).free < 48 * 1024**3:
+              for p in Path('/Applications').glob('Xcode*.app'):
+                  if not p.is_symlink() and p.is_dir() and p.resolve() != selected:
+                      subprocess.run(['sudo','/bin/rm','-rf','--',str(p)],check=True)
+          print('Free build disk GiB:',round(shutil.disk_usage(os.environ['RUNNER_TEMP']).free/1024**3,1))
+          PY
+      - name: Restore and verify own private inputs
+        run: python source/scripts/cloud_ipa.py download --repo "$GITHUB_REPOSITORY" --tag "$INPUT_TAG" --out "$RUNNER_TEMP/inputs"
+      - name: Compile strict BOTW 1.9.0, A16 archives and unsigned IPA
+        run: |
+          mkdir -p "$RUNNER_TEMP/output"
+          python source/scripts/build_ipa_from_nsp.py "$RUNNER_TEMP/inputs/game" -k "$RUNNER_TEMP/inputs/prod.keys" \
+            --package v1114112 --require-title-id 01007EF00011E000 --strict-profile \
+            --platform ios --romfs separate --keep-extracted --gpu g14p,g15p \
+            --language it --show-fps --progress lines --app-name "BOTW A16 Lab" --bundle-id org.gds0202.botw.a16 -o "$RUNNER_TEMP/output/BOTW-A16.ipa"
+      - name: Match the data image and record the build
+        run: |
+          python - <<'PY'
+          import json,os,subprocess
+          from pathlib import Path
+          temp=Path(os.environ['RUNNER_TEMP']); root=temp/'inputs/game/01007EF00011E000_build'
+          image=root/'extract/v1114112/RomFS.img'
+          if not image.is_file(): raise SystemExit('Missing strictly matched BOTW 1.9.0 image')
+          image.rename(temp/'output/romfs.img')
+          meta={'source':os.environ['SOURCE_REVISION'],'game':'01007EF00011E000','package':'v1114112',
+                'main_build':'cd57b23fa4bbad65803d9788c01821ee','cpu':'apple-a16','gpu_archives':['g14p','g15p'],
+                'device_validation':'pending','xcode':subprocess.check_output(['xcodebuild','-version'],text=True),
+                'metal':subprocess.check_output(['xcrun','-sdk','iphoneos','metal','--version'],text=True)}
+          (temp/'output/build.json').write_text(json.dumps(meta,indent=2)+'\n')
+          PY
+      - name: Save output in an own private draft release
+        run: python source/scripts/cloud_ipa.py publish-output --repo "$GITHUB_REPOSITORY" --tag "botw-output-$GITHUB_RUN_ID" --folder "$RUNNER_TEMP/output"
+      - name: Download instructions
+        env:
+          OUTPUT_TAG: botw-output-${{ github.run_id }}
+        run: |
+          printf 'Output release: %s\nUse cloud_ipa.py download with that tag in this private repository.\n' "$OUTPUT_TAG" >> "$GITHUB_STEP_SUMMARY"

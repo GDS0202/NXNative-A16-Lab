@@ -354,3 +354,6 @@ check_t_float_pad: RUN_ENV = MTL_DEBUG_LAYER=1
 
 t_frame_metrics: t_frame_metrics.c ../nvn/nvn_frame_metrics.c ../nvn/nvn_frame_metrics.h
 	clang $(CFLAGS) -pthread -o $@ t_frame_metrics.c ../nvn/nvn_frame_metrics.c
+
+t_warm_budget: t_warm_budget.m ../nvn/nvn_warm_budget.h
+	clang $(CFLAGS) -fobjc-arc -o $@ t_warm_budget.m -framework Foundation

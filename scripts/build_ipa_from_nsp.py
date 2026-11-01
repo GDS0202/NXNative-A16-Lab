@@ -2042,6 +2042,8 @@ def parse_args(argv):
         epilog='example: python3 scripts/build_ipa_from_nsp.py ~/nsp/"Super Mario Bros Wonder" -k ~/keys/prod.keys')
     ap.add_argument('nsp_dir', nargs='?', help='folder holding one game\'s NSPs (default: the NSP_DIR setting, else asked)')
     ap.add_argument('-k', '--keys', help='path of prod.keys (default: the PROD_KEYS setting, else asked)')
+    ap.add_argument('--require-title-id', help='stop unless the input base game has this exact 16-digit title ID (automated builds)')
+    ap.add_argument('--strict-profile', action='store_true', help='stop on an unregistered version or NSO build instead of deriving a profile')
     ap.add_argument('-p', '--package', help='version packed into the IPA, e.g. v327680 / v0 (default: the newest in the folder)')
     ap.add_argument('-o', '--out', help='output IPA, or app with --platform mac-app (default: <the profile\'s ipa>, or <game name>.app, in the NSP folder)')
     ap.add_argument('--app-name', help='app name on the home screen (default: the game name in the base NSP)')
@@ -2174,6 +2176,9 @@ def main(args=None):
     env.setdefault('J', str(os.cpu_count() or 8))   # shader_split.py's and dmsh_build.py's workers (their default is 8)
     py = sys.executable
     app, fam = scan_nsps(nsp_dir)
+    if args.require_title_id:
+        if not re.fullmatch(r'[0-9A-Fa-f]{16}', args.require_title_id) or app != int(args.require_title_id, 16):
+            raise BuildError('input game does not match --require-title-id')
     fam = decompress_nsz(nsp_dir, app, fam, keys, env)
     force =args.provisional or PROVISIONAL   # a provisional profile even when dm/games has one (testing the guesses)
     g, provisional, shadowed = None if force else gamemod.by_title(app), False, False
@@ -2260,6 +2265,8 @@ def main(args=None):
         derived = f'not the builds game profile {g.id} registers: {"; ".join(bad)}'
         say(f'{derived}: packing {pkg_ver} from a profile derived from it')
         versions, dirs = [pkg_ver], {pkg_ver: dirs[pkg_ver]}
+    if args.strict_profile and (derived or provisional or bad):
+        raise BuildError('strict profile check: unregistered version or module build; no derived build is allowed')
     reg = g   # the profile as registered (a derived build reports what it lacks against it)
     if derived:   # the derived profile goes where a provisional one would, and every tool (game.py, make, build_ipa.sh) takes it first (DM_GAMES_FIRST)
         pdir = Path(os.path.expanduser(args.profile_out or PROFILE_OUT)).resolve() if (args.profile_out or PROFILE_OUT) else nsp_dir / f'{app:016X}_build' / 'profile'

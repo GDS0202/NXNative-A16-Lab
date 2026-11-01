@@ -14,15 +14,15 @@
 
 // Increment when encoding semantics change. Current packing optimization is
 // byte-identical to the inherited encoder. No chain/game shader data is cached.
-#define BC_CACHE_REVISION 1u
+#define BC_CACHE_REVISION 2u
 #define BC_CACHE_MAX_ENTRY (16u << 20)
 #define BC_CACHE_BUDGET (256u << 20)
 static NSString *root;
 static dispatch_queue_t writer;
 static _Atomic int busy, pressure;
 static _Atomic uint64_t hits, misses, writes, rejected, saved;
-typedef struct { uint8_t magic[8]; uint64_t size; uint8_t digest[32]; } cache_header;
-static const uint8_t magic[8] = {'N','X','B','C','A','S','T','1'};
+typedef struct { uint8_t magic[8]; uint64_t size; uint8_t digest[32]; char key[64]; } cache_header;
+static const uint8_t magic[8] = {'N','X','B','C','A','S','T','2'};
 
 static void digest(const void *p, size_t n, uint8_t out[32]) {
     CC_SHA256_CTX c; CC_SHA256_Init(&c);
@@ -47,10 +47,12 @@ static void prune(void) {
             includingPropertiesForKeys:@[NSURLContentModificationDateKey, NSURLFileSizeKey, NSURLIsRegularFileKey] options:NSDirectoryEnumerationSkipsHiddenFiles error:nil];
         NSMutableArray<NSDictionary *> *entries = [NSMutableArray array]; uint64_t total = 0;
         for (NSURL *u in files) {
-            if (![u.pathExtension isEqualToString:@"astc"]) continue;
+            BOOL pending = [u.pathExtension isEqualToString:@"pending"];
+            if (!pending && ![u.pathExtension isEqualToString:@"astc"]) continue;
             NSNumber *regular = nil, *size = nil; NSDate *date = nil;
             [u getResourceValue:&regular forKey:NSURLIsRegularFileKey error:nil]; if (!regular.boolValue) continue;
             [u getResourceValue:&size forKey:NSURLFileSizeKey error:nil]; [u getResourceValue:&date forKey:NSURLContentModificationDateKey error:nil];
+            if (pending && date && -date.timeIntervalSinceNow > 3600 && [NSFileManager.defaultManager removeItemAtURL:u error:nil]) continue;
             total += size.unsignedLongLongValue;
             [entries addObject:@{@"url":u, @"size":size ?: @0, @"date":date ?: NSDate.distantPast}];
         }
@@ -87,7 +89,8 @@ static int load(NSString *path, uint8_t *dst, size_t n) {
     int fd = open(path.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW | O_CLOEXEC); if (fd < 0) return 0;
     struct stat st; cache_header hd; uint8_t hash[32];
     int ok = !fstat(fd, &st) && S_ISREG(st.st_mode) && st.st_size == (off_t)(sizeof hd + n) && io_all(fd, &hd, sizeof hd, 0)
-        && !memcmp(hd.magic, magic, 8) && hd.size == n && io_all(fd, dst, n, 0);
+        && !memcmp(hd.magic, magic, 8) && hd.size == n
+        && !memcmp(hd.key, path.lastPathComponent.UTF8String, 64) && io_all(fd, dst, n, 0);
     close(fd);
     if (ok) { digest(dst, n, hash); ok = !memcmp(hash, hd.digest, 32); }
     if (!ok) { atomic_fetch_add(&rejected, 1); return 0; }
@@ -101,6 +104,7 @@ static void store(NSString *path, const uint8_t *dst, size_t n) {
     dispatch_async(writer, ^{ @autoreleasepool {
         if (!atomic_load(&pressure)) {
             cache_header hd; memcpy(hd.magic, magic, 8); hd.size = n; digest(copy, n, hd.digest);
+            memcpy(hd.key, path.lastPathComponent.UTF8String, 64);
             NSString *tmp = [path stringByAppendingFormat:@".%@.pending", NSUUID.UUID.UUIDString];
             int fd = open(tmp.fileSystemRepresentation, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
             if (fd >= 0) {

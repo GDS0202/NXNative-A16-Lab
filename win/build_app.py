@@ -92,6 +92,8 @@ def compile_all(clang, sdk, files, incs, obj_dir, extra_defs):
         elif f.suffix == '.m': flags = common + ['-std=gnu11', '-fobjc-arc']
         elif f.suffix == '.S': flags = common
         else: continue
+        if name == 'bc_soft.c': flags += ['-O2', '-ffp-contract=off']
+        elif name == 'nvn_deswizzle.c': flags += ['-O2']
         key = hashlib.sha256((str(f) + '\0' + '\0'.join(flags)).encode()).hexdigest()[:12]
         o = obj_dir / f'{f.stem}-{key}.o'
         objs.append(o)
