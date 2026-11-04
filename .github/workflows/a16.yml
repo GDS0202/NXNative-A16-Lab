@@ -20,6 +20,14 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.14'
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Internal package metadata reader and synthetic CNMT boundary tests
+        run: |
+          dotnet build dm/tools/nx_extract -c Release --nologo
+          dotnet run --project dm/tools/tests/cnmt -c Release
+          python -m unittest dm/tools/tests/test_nsp_scan.py dm/tools/tests/test_nsp_nsz.py dm/tools/tests/test_nsp_external_drive.py dm/tools/tests/test_nsp_incremental.py
       - run: python -m pip install texture2ddecoder Pillow
       - name: Exact BC upload bytes, independent ASTC decode, odd mips and pitches
         run: python -m unittest -v dm/gfx/tests/test_bc_soft.py
