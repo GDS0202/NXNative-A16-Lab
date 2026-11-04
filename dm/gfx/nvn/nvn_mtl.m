@@ -453,7 +453,20 @@ void mtl_write_capabilities(void) {
     id<MTLDevice> device = MTLCreateSystemDefaultDevice();
     if (!device) return;
     if (nvn_stutter_enabled()) {
-        NSDictionary *caps = @{ @"schema": @1, @"os_version": NSProcessInfo.processInfo.operatingSystemVersionString, @"metal_device": device.name ?: @"unknown",
+        NSMutableDictionary *choices = [NSMutableDictionary dictionary];
+        const char *settings[] = {"DM_RENDER_SCALE", "DM_DYNAMIC_RESOLUTION", "DM_OPMODE", "DM_OUTPUT_HEIGHT", "DM_FPS_TARGET",
+            "DM_PRESENT_UPSCALE", "DM_PRESENT_SNAP", "DM_PSO_MTL4", "DM_PSO_PREBUILD", "DM_NVN_ENC_THREAD", "DM_FPS_HOLD",
+            "DM_BC_WORKERS", "DM_BC_ASTC", "DM_BC_CACHE", "DM_PSO_PREPARE_THREADS", "DM_PSO_USER_WARM", "DM_PSO_USER_WARM_LIMIT", NULL};
+        for (int i = 0; settings[i]; i++) {
+            const char *value = getenv(settings[i]);
+            if (value && !strcmp(settings[i], "DM_BC_CACHE") && strcmp(value, "on") && strcmp(value, "off")) value = "custom-directory";
+            choices[@(settings[i])] = value ? @(value) : @"profile-default";
+        }
+        NSDictionary *info = NSBundle.mainBundle.infoDictionary;
+        NSDictionary *caps = @{ @"schema": @1, @"os_version": NSProcessInfo.processInfo.operatingSystemVersionString,
+            @"source_revision": info[@"NXNativeSourceRevision"] ?: @"not-recorded",
+            @"game_id": info[@"NXNativeGameId"] ?: @"not-recorded", @"game_package": info[@"NXNativeGamePackage"] ?: @"not-recorded",
+            @"settings_environment": choices, @"metal_device": device.name ?: @"unknown",
             @"metal4": @([device supportsFamily:MTLGPUFamilyMetal4]), @"apple7": @([device supportsFamily:MTLGPUFamilyApple7]),
             @"apple8": @([device supportsFamily:MTLGPUFamilyApple8]), @"apple9": @([device supportsFamily:MTLGPUFamilyApple9]),
             @"metalfx_spatial": @([MTLFXSpatialScalerDescriptor supportsDevice:device]),

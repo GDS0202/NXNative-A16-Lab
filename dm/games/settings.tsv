@@ -33,7 +33,7 @@ DM_NVN_ENC_THREAD	toggle	-	1|0	gfxapi:nvn	Performance	Encode thread
 DM_FPS_HOLD	toggle	on/off	DM_GAME_FPS_HOLD	DM_GAME_FPS_TARGET!=0	Performance	Hold frames when late
 DM_METAL_HUD	toggle	-	0	always	Performance	Performance HUD
 DM_STUTTER	toggle	-	0	gfxapi:nvn	Performance	Record performance trace	Writes bounded stutter.jsonl and capabilities.json in Documents. Restart after changing; measure recording overhead in A/B tests.
-DM_BC_WORKERS	choice	1=1 worker,2=2 workers,4=4 workers	2	gfxapi:nvn	Performance	BC texture workers	Two limits competition with game threads on A16. More workers can increase heat and frame spikes.
+DM_BC_WORKERS	choice	1=1 worker,2=2 workers,4=4 workers	2	gfxapi:nvn	Performance	BC texture workers	Conservative default: compare 1/2/4 on the same route. More workers can increase heat and frame spikes.
 DM_BC_CACHE	choice	on=On,off=Off	on	gfxapi:nvn	Performance	Persistent ASTC cache	Reuses verified texture conversions; up to 256 MB on disk and one 16 MB temporary write.
 DM_PSO_PREPARE_THREADS	choice	1=1 worker,2=2 workers,4=4 workers	2	gfxapi:nvn	Performance	Shader preparation workers	Applies before gameplay; the learned and bundled shader lists remain enabled.
 DM_OUTPUT_HEIGHT	choice	720=720p,900=900p,1080=1080p,0=Native display	720	platform:ios	Game	Display output	Lower output uses smaller presentation buffers. Internal render scale is a separate setting.	level=basic

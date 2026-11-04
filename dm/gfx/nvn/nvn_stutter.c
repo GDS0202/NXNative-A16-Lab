@@ -138,13 +138,13 @@ static void push(const event *e) {
     atomic_fetch_sub(&producers, 1);
 }
 
-void nvn_stutter_frame(const nvn_stutter_sample *s) { if (!s || !nvn_stutter_enabled()) return; event e = {.kind = FRAME, .frame = *s}; push(&e); }
+void nvn_stutter_frame(const nvn_stutter_sample *s) { if (!s || !s->timestamp_ns || !nvn_stutter_enabled()) return; event e = {.kind = FRAME, .frame = *s}; push(&e); }
 void nvn_stutter_present(uint64_t frame, uint64_t ticket, uint64_t ns) { if (!ns || !nvn_stutter_enabled()) return; event e = {.kind = PRESENT, .frame = {.frame = frame, .timestamp_ns = ns}, .ticket = ticket}; push(&e); }
 void nvn_stutter_system(uint64_t ns, uint64_t footprint, uint64_t headroom, int thermal, int low_power) {
-    if (!nvn_stutter_enabled()) return;
+    if (!ns || !nvn_stutter_enabled()) return;
     event e = {.kind = SYSTEM, .frame = {.timestamp_ns = ns}, .footprint = footprint, .headroom = headroom, .thermal = thermal, .low_power = low_power}; push(&e);
 }
-void nvn_stutter_boundary(uint64_t ns) { event e = {.kind = BOUNDARY, .frame = {.timestamp_ns = ns}}; push(&e); }
+void nvn_stutter_boundary(uint64_t ns) { if (!ns) return; event e = {.kind = BOUNDARY, .frame = {.timestamp_ns = ns}}; push(&e); }
 uint64_t nvn_stutter_lost(void) { return atomic_load(&lost); }
 void nvn_stutter_stop(void) {
     if (!started) return;

@@ -197,7 +197,7 @@ static UILabel *front_ios_fps_label(void) {
                 nvn_frame_metrics fm = nvn_frame_metrics_snapshot();
                 nvn_bc_cache_info bc = nvn_bc_cache_stats();
                 int mg = dm_mem_guard();
-                l.text = [NSString stringWithFormat:@" %.0f real fps · GPU %@ · >50ms %u/%u\n p95 %.1f · p99 %.1f ms · thermal %d%@\n %.2f GB used · %.2f GB left · ASTC %llu/%llu · trace lost %llu ",
+                l.text = [NSString stringWithFormat:@" %.0f real fps · GPU %@ · ≥50ms %u/%u\n p95 %.1f · p99 %.1f ms · thermal %d%@\n %.2f GB used · %.2f GB left · ASTC %llu/%llu · trace lost %llu ",
                     fps, gpu >= 0 ? [NSString stringWithFormat:@"%.1f ms", gpu] : @"--", fm.stalls50, fm.samples,
                     fm.p95_ms, fm.p99_ms, dm_thermal_now(), mg ? @" · GUARD 30" : @"", used, left,
                     (unsigned long long)bc.hits, (unsigned long long)(bc.hits + bc.misses), (unsigned long long)nvn_stutter_lost()];

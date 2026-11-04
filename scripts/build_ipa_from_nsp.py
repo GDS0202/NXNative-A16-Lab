@@ -588,15 +588,14 @@ def vnum(ver):   # 'v655360' → 655360
 
 
 def nsp_versions(fam, builds):
-    """The versions the folder holds: {version: its update NSP, or None for v0 (the base game alone)}. An update is known by the [v<N>] tag in its file name; a single update without one
-    is taken for the newest update the profile registers (its build IDs are checked once extracted), and is left out when the profile registers none or other updates are there"""
+    """Package versions are CNMT integers. Keep builds for the caller API only;
+    an unreadable version must never be guessed from a filename or newest profile.
+    """
     out = {'v0': None}
-    for v, p in fam['updates']:
-        if v is not None: out[f'v{v}'] = p
-    loose = [p for v, p in fam['updates'] if v is None]
-    reg = sorted((b for b in builds if b != 'v0'), key=vnum)
-    if loose and len(fam['updates']) == 1 and reg: out[reg[-1]] = loose[0]
-    elif loose: say(f'[RED] leaving out update NSPs without a version tag ([v<N>]) in their name: {", ".join(p.name for p in loose)}')
+    for version, path in fam['updates']:
+        if type(version) is not int or not 0 <= version < 2**32:
+            raise BuildError('update has no verified internal package version; inspect its CNMT again')
+        out[f'v{version}'] = path
     return out
 
 

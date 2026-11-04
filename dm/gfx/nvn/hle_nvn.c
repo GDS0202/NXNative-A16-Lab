@@ -1880,18 +1880,20 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
         trow(f, "@drawable_ms", trace.drawable_ms = mtl_drawable_ns_take() / 1e6);
         trow(f, "@sub_wall_ms", trace.sub_wall_ms = atomic_exchange(&g_sub_wall_ns, 0) / 1e6); trow(f, "@sub_cpu_ms", trace.sub_cpu_ms = atomic_exchange(&g_sub_cpu_ns, 0) / 1e6); trow(f, "@sub_instr", (double)atomic_exchange(&g_sub_instr, 0));
         if (nvn_stutter_enabled()) {
-            static nvn_bc_cache_info previous; nvn_bc_cache_info bc = nvn_bc_cache_stats();
+            static nvn_bc_cache_info previous; static int seeded; nvn_bc_cache_info bc = nvn_bc_cache_stats();
             trace.bc_decode_ms = (bc.decode_ns - previous.decode_ns) / 1e6;
             trace.bc_cache_ms = (bc.cache_ns - previous.cache_ns) / 1e6;
             trace.bc_calls = bc.decode_calls - previous.decode_calls;
             trace.cache_hits = bc.hits - previous.hits; trace.cache_misses = bc.misses - previous.misses;
-            previous = bc; g_lf[f % LFN].trace = trace;
+            previous = bc;
+            if (seeded) g_lf[f % LFN].trace = trace;  // first snapshot seeds startup/prewarm counters
+            seeded = 1;
         }
     } else atomic_store(&g_nvn_ns, 0);
     g_acq_wait_ns = g_pq_wait_ns = 0;
     if (f >= 8 && nvn_stutter_enabled()) {
         lf_rec *r = &g_lf[(f - 8) % LFN];
-        if (r->f == f - 8 && r->trace.frame == f - 8) { r->trace.gpu_ms = mtl_gpu_ms(f - 8); nvn_stutter_frame(&r->trace); }
+        if (r->f == f - 8 && r->trace.frame == f - 8 && r->trace.timestamp_ns) { r->trace.gpu_ms = mtl_gpu_ms(f - 8); nvn_stutter_frame(&r->trace); }
     }
     if (f >= 8) { double g = mtl_gpu_ms(f - 8); if (g >= 0) { tpush(3, g); trow(f - 8, "@gpu_ms", g); g_hr[g_hn++ % HRN] = g; }   // GPU time is taken 8 frames late (already completed)
         { lf_rec *r = &g_lf[(f - 8) % LFN]; if (g >= 0 && r->f == f - 8) mtl_ab_gpu(f - 8, g, r->fr); }   // DM_AB phases

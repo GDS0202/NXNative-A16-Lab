@@ -46,6 +46,11 @@ class Scan(unittest.TestCase):
         self.assertEqual(fam, {'base': base, 'updates': [(1114112, update)], 'dlc': []})
         self.assertEqual(nsp.nsp_versions(fam, {}), {'v0': None, 'v1114112': update})
 
+    def test_missing_package_version_is_not_guessed_from_profile(self):
+        fam = {'base': Path('base.nsp'), 'updates': [(None, Path('update [v999].nsp'))], 'dlc': []}
+        with self.assertRaisesRegex(nsp.BuildError, 'internal package version'):
+            nsp.nsp_versions(fam, {'v999': {}})
+
     def test_bundled_cartridge_base_update_and_dlc(self):
         p = self.package('card.xci', record(), record('Patch', 1114112), record('AddOnContent', 65536))
         self.assertEqual(self.scan()[1], {'base': p, 'updates': [(1114112, p)], 'dlc': [(APP + 0x1001, 65536, p)]})

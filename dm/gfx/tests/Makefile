@@ -365,3 +365,4 @@ t_stutter: t_stutter.c ../nvn/nvn_stutter.c ../nvn/nvn_stutter.h
 check_t_stutter: t_stutter
 	./t_stutter
 	./t_stutter on
+	./t_stutter normal

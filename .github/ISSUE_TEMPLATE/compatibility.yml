@@ -1,0 +1,30 @@
+name: Device and game compatibility
+description: Reproducible boot, graphics and performance evidence
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: Do not attach games, keys, saves, private IPAs or proprietary shader caches. Check diagnostic files before sharing.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Source SHA, device/SoC/RAM, OS and game package/build ID
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Boot, gameplay, graphics, audio and crashes
+    validations:
+      required: true
+  - type: textarea
+    id: route
+    attributes:
+      label: Resolution, settings, cache state, route and repeated measurements
+      description: Include P95/P99, tail sample count, memory/headroom and thermals when reporting performance.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized trace/log excerpt and visual evidence

@@ -29,13 +29,21 @@ using Path = System.IO.Path;
 static class P {
     [DllImport("libc", SetLastError = true)] static extern int clonefile(string src, string dst, uint flags);
 
+    static KeySet ReadKeys(string path) {
+        TextWriter stdout = Console.Out, stderr = Console.Error;
+        try {
+            Console.SetOut(TextWriter.Null); Console.SetError(TextWriter.Null);
+            return ExternalKeyReader.ReadKeyFile(path);
+        } catch (Exception) { throw new PackageMetadataException("cannot read the supplied key file; check its format and required key generation"); }
+        finally { Console.SetOut(stdout); Console.SetError(stderr); }
+    }
     static int Main(string[] a) {
         if (a.Length == 3 && a[1] == "--inspect") return InspectCommand(a);
         bool manifest = Array.IndexOf(a, "--manifest") >= 0; a = Array.FindAll(a, s => s != "--manifest");
         bool image = Array.IndexOf(a, "--romfs-image") >= 0; a = Array.FindAll(a, s => s != "--romfs-image");
         g_allow = Array.IndexOf(a, "--allow-damaged") >= 0; a = Array.FindAll(a, s => s != "--allow-damaged");
         if (a.Length < 4) { Console.Error.WriteLine("usage: nx_extract <prod.keys> <base.nsp> <update.nsp|-> <out dir> [base RomFS dir] [--romfs-image|--manifest] [--allow-damaged]\n       nx_extract <prod.keys> --aoc <dlc.nsp> <out dir or image> [--romfs-image]"); return 2; }
-        KeySet ks = ExternalKeyReader.ReadKeyFile(a[0]);
+        KeySet ks = ReadKeys(a[0]);
         if (a[1] == "--aoc") return Aoc(ks, a[2], a[3], image, a.Length > 4 && a[4].StartsWith("--title-id=") ? a[4][11..] : null);
         var basePkg = OpenNsp(ks, a[1], ContentMetaType.Application); var updPkg = a[2] == "-" ? null : OpenNsp(ks, a[2], ContentMetaType.Patch);
         Nca baseProg = Pick(basePkg, NcaContentType.Program) ?? throw new Exception("no Program NCA in the base NSP");
@@ -184,7 +192,7 @@ static class P {
                 // Suppress library key-parser diagnostics as well as exception
                 // stacks. Only our constant, key-safe messages leave this helper.
                 Console.SetOut(TextWriter.Null); Console.SetError(TextWriter.Null);
-                KeySet keys = ExternalKeyReader.ReadKeyFile(args[0]);
+                KeySet keys = ReadKeys(args[0]);
                 records = ReadMetadata(OpenPackage(keys, args[2]));
             } finally { Console.SetOut(stdout); Console.SetError(stderr); }
             Console.WriteLine(JsonSerializer.Serialize(new { schema = 1, verification = "metadata-only", records },

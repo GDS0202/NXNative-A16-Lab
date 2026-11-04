@@ -43,6 +43,7 @@ jobs:
           clang -O2 -g -pthread -fsanitize=address,undefined -DNVN_STUTTER_LIMIT=8192 dm/gfx/tests/t_stutter.c dm/gfx/nvn/nvn_stutter.c -o /tmp/stutter
           /tmp/stutter
           /tmp/stutter on
+          /tmp/stutter normal
           python -m unittest dm/tools/tests/test_stutter_analyze.py
       - name: Presentation statistics under ASan and UBSan
         run: |
@@ -89,3 +90,4 @@ jobs:
           clang -O1 -g -pthread -fsanitize=thread -DNVN_STUTTER_LIMIT=8192 dm/gfx/tests/t_stutter.c dm/gfx/nvn/nvn_stutter.c -o /tmp/stutter
           /tmp/stutter
           /tmp/stutter on
+          /tmp/stutter normal
