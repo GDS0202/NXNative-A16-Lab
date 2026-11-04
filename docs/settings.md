@@ -217,3 +217,11 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Performance HUD | `DM_METAL_HUD` | `1`, `0` |
 
 `DM_LAUNCHER=0` skips the settings screen; the choices you saved there still apply. `DM_SAVED_CHOICES=0` starts with the tested defaults and keeps your saved choices for later. How the settings are listed for each game: [dm/games/settings.tsv](../dm/games/settings.tsv).
+
+## A16 lab performance recording
+
+**Record performance trace** (`DM_STUTTER=1`) writes bounded `stutter.jsonl`
+and `capabilities.json` in Documents. It is off by default. Restart after
+changing it, preserve the files before the next launch, and follow the
+[measurement route](performance.md). The lab HUD uses actual displayed guest
+frames and adds P99, thermal state, cache counts and lost-record counts.

@@ -1,0 +1,88 @@
+# Copy only into the owner's PRIVATE build repository as .github/workflows/rebuild.yml.
+name: Private host-only A16 experiment
+on:
+  workflow_dispatch:
+    inputs:
+      output_tag:
+        description: Existing own private output release (IPA + matching external data)
+        default: botw-output-41364325695
+        required: true
+        type: string
+      source_revision:
+        description: Full reviewed source SHA with passing source CI
+        required: true
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: private-botw
+  cancel-in-progress: false
+jobs:
+  rebuild:
+    if: github.event.repository.private
+    runs-on: xcode-27
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_REVISION: ${{ inputs.source_revision }}
+      PREVIOUS_OUTPUT: ${{ inputs.output_tag }}
+    steps:
+      - name: Validate the reviewed revision and private source release
+        run: |
+          python3 - <<'PY'
+          import os,re
+          if not re.fullmatch('[0-9a-f]{40}', os.environ['SOURCE_REVISION']): raise SystemExit('Use a full reviewed source SHA')
+          if not re.fullmatch('[A-Za-z0-9][A-Za-z0-9_.-]{0,90}', os.environ['PREVIOUS_OUTPUT']): raise SystemExit('Invalid output tag')
+          import json,subprocess
+          runs=json.loads(subprocess.check_output(['gh','api','repos/GDS0202/NXNative-A16-Lab/actions/runs?head_sha='+os.environ['SOURCE_REVISION']+'&per_page=100'],text=True))['workflow_runs']
+          required={'tests','A16 validation','lint-python'}
+          passed={r['name'] for r in runs if r['status']=='completed' and r['conclusion']=='success'}
+          if required-passed: raise SystemExit('Source CI must pass before private assets are used: '+', '.join(sorted(required-passed)))
+
+          PY
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: GDS0202/NXNative-A16-Lab
+          ref: ${{ inputs.source_revision }}
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Dependencies, exact compiler and disk headroom
+        run: |
+          brew install xcodegen
+          python source/dm/gfx/tools/dmsh_chain.py --check-tools
+          python - <<'PY'
+          import os,shutil
+          if shutil.disk_usage(os.environ['RUNNER_TEMP']).free < 12 * 1024**3: raise SystemExit('Need 12 GiB free for host reuse; no game inputs downloaded')
+          PY
+      - name: Rebuild host, verify identical relinked guest modules, preserve shader/data stamps
+        run: |
+          python source/scripts/rebuild_host.py --repo "$GITHUB_REPOSITORY" --from-tag "$PREVIOUS_OUTPUT" \
+            --work "$RUNNER_TEMP/host-reuse" --output "$RUNNER_TEMP/output"
+      - name: Publish privately, reusing the original data image without uploading it
+        run: |
+          python source/scripts/cloud_ipa.py publish-output --repo "$GITHUB_REPOSITORY" --tag "botw-output-$GITHUB_RUN_ID" \
+            --folder "$RUNNER_TEMP/output" --reuse-data-tag "$PREVIOUS_OUTPUT"
+      - name: Preserve key-free build diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: private-host-build-log
+          path: ${{ runner.temp }}/host-reuse/host-build.log
+          retention-days: 7
+      - name: Write download instructions
+        run: |
+          python - <<'PY'
+          import os
+          tag='botw-output-'+os.environ['GITHUB_RUN_ID']
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as out:
+              out.write('Experimental output: `'+tag+'`. Device validation pending.\n\n')
+              out.write('Use the updated cloud_ipa.py with `--only BOTW-A16.ipa --only build.json`; keep the existing matching romfs.img.\n')
+          PY

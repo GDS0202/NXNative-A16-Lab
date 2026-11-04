@@ -271,7 +271,7 @@ class DeriveProfile(Base):
         args = nsp.parse_args([str(self.tmp), '-k', str(keys), '--platform', 'mac', '--provisional', '--profile-out', str(self.pdir.parent)])
         with mock.patch.object(nsp, 'find_repo', return_value=REPO), mock.patch.object(nsp, 'apple_silicon', return_value=True), \
              mock.patch.object(nsp, '_importable', return_value=True), mock.patch.object(nsp.shutil, 'which', return_value='/dotnet'), \
-             mock.patch.object(nsp, 'scan_nsps', return_value=(TID, fam)), mock.patch.object(nsp, 'decompress_nsz', return_value=fam), \
+             mock.patch.object(nsp, 'input_inspector', return_value=mock.Mock()), mock.patch.object(nsp, 'scan_nsps', return_value=(TID, fam)), mock.patch.object(nsp, 'decompress_nsz', return_value=fam), \
              mock.patch.object(nsp, 'nsp_versions', side_effect=RuntimeError('profile selected')):
             with self.assertRaisesRegex(RuntimeError, 'profile selected'): nsp.main(args)
         self.assertFalse(key.exists())

@@ -34,6 +34,7 @@
 #include "nvn_primitive.h"
 #include "nvn_timestamp.h"
 #include "nvn_frame_metrics.h"
+#include "nvn_stutter.h"
 #include "nvn_warm_budget.h"
 #include "dmsh_chain.h"   // DMSH_CHAIN: the translation chain version of the B shader library expected by this source tree, one for every game (beside this file, tools/dmsh_chain.py --header)
 #include "game_profile.h"   // game profile constants (profile id, the profile's switches)
@@ -445,7 +446,45 @@ static void udc_selftest(void) {
         MLOG("UDC self-check %s %s %lux%lu first value %08x, values differing from it %lu / %lu", g_dev.name.UTF8String, depth ? "Depth32F_S8" : "RGBA8", (unsigned long)w, (unsigned long)h, px[0], (unsigned long)bad, (unsigned long)(w * h));
     }
 }
+// Independent of renderer initialization: UIKit/launcher setup can create a
+// device before Play. Recording must use the choices applied at Play, not an
+// environment value cached by early UI setup.
+void mtl_write_capabilities(void) {
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    if (!device) return;
+    if (nvn_stutter_enabled()) {
+        NSMutableDictionary *choices = [NSMutableDictionary dictionary];
+        const char *settings[] = {"DM_RENDER_SCALE", "DM_DYNAMIC_RESOLUTION", "DM_OPMODE", "DM_OUTPUT_HEIGHT", "DM_FPS_TARGET",
+            "DM_PRESENT_UPSCALE", "DM_PRESENT_SNAP", "DM_PSO_MTL4", "DM_PSO_PREBUILD", "DM_NVN_ENC_THREAD", "DM_FPS_HOLD",
+            "DM_BC_WORKERS", "DM_BC_ASTC", "DM_BC_CACHE", "DM_PSO_PREPARE_THREADS", "DM_PSO_USER_WARM", "DM_PSO_USER_WARM_LIMIT", NULL};
+        for (int i = 0; settings[i]; i++) {
+            const char *value = getenv(settings[i]);
+            if (value && !strcmp(settings[i], "DM_BC_CACHE") && strcmp(value, "on") && strcmp(value, "off")) value = "custom-directory";
+            choices[@(settings[i])] = value ? @(value) : @"profile-default";
+        }
+        NSDictionary *info = NSBundle.mainBundle.infoDictionary;
+        NSDictionary *caps = @{ @"schema": @1, @"os_version": NSProcessInfo.processInfo.operatingSystemVersionString,
+            @"source_revision": info[@"NXNativeSourceRevision"] ?: @"not-recorded",
+            @"game_id": info[@"NXNativeGameId"] ?: @"not-recorded", @"game_package": info[@"NXNativeGamePackage"] ?: @"not-recorded",
+            @"settings_environment": choices, @"metal_device": device.name ?: @"unknown",
+            @"metal4": @([device supportsFamily:MTLGPUFamilyMetal4]), @"apple7": @([device supportsFamily:MTLGPUFamilyApple7]),
+            @"apple8": @([device supportsFamily:MTLGPUFamilyApple8]), @"apple9": @([device supportsFamily:MTLGPUFamilyApple9]),
+            @"metalfx_spatial": @([MTLFXSpatialScalerDescriptor supportsDevice:device]),
+            @"metalfx_temporal": @([MTLFXTemporalScalerDescriptor supportsDevice:device]),
+            @"metalfx_interpolation": @([MTLFXFrameInterpolatorDescriptor supportsDevice:device]),
+            @"native_bc": @([device supportsBCTextureCompression]), @"unified_memory": @(device.hasUnifiedMemory),
+            @"physical_memory_bytes": @(NSProcessInfo.processInfo.physicalMemory),
+            @"active_cpus": @(NSProcessInfo.processInfo.activeProcessorCount),
+            @"recommended_working_set_bytes": @(device.recommendedMaxWorkingSetSize), @"max_buffer_bytes": @(device.maxBufferLength) };
+        NSData *json = [NSJSONSerialization dataWithJSONObject:caps options:NSJSONWritingPrettyPrinted error:nil];
+        [json writeToFile:@"capabilities.json" options:NSDataWritingAtomic error:nil];
+    }
+
+}
 void mtl_init(void) {
+#if TARGET_OS_OSX
+    nvn_stutter_start();
+#endif
     if (g_dev) return;
     const char *vbc = getenv("DM_NVN_VBUF_CACHE"); g_vbuf_cache = !(vbc && !strcmp(vbc, "0"));
     const char *link = getenv("DM_PRESENT_LINK");
@@ -456,9 +495,17 @@ void mtl_init(void) {
     g_dev = MTLCreateSystemDefaultDevice();
     if (!g_dev) MDIE("no Metal device");
     if (!g_dev.hasUnifiedMemory) MDIE("needs a unified-memory device (zero-copy memory pools)");
+    MLOG("capabilities: Metal4=%d Apple7=%d Apple8=%d Apple9=%d nativeBC=%d unified=%d; recommended working set %llu MiB, max buffer %llu MiB; active CPUs %lu",
+         [g_dev supportsFamily:MTLGPUFamilyMetal4], [g_dev supportsFamily:MTLGPUFamilyApple7],
+         [g_dev supportsFamily:MTLGPUFamilyApple8], [g_dev supportsFamily:MTLGPUFamilyApple9],
+         [g_dev supportsBCTextureCompression], g_dev.hasUnifiedMemory,
+         (unsigned long long)(g_dev.recommendedMaxWorkingSetSize >> 20), (unsigned long long)(g_dev.maxBufferLength >> 20),
+         (unsigned long)NSProcessInfo.processInfo.activeProcessorCount);
+
     {   // BC textures on a GPU that cannot sample them (A16 and older iPhone / iPad GPUs): decoded on the CPU at upload into uncompressed formats (bc_soft.c). DM_BC_SOFT=1 forces it, =0 turns it off
         const char *e = getenv("DM_BC_SOFT");
         nvn_bc_soft = e ? atoi(e) != 0 : ![g_dev supportsBCTextureCompression];
+        if (!nvn_bc_soft && ![g_dev supportsBCTextureCompression]) MDIE("DM_BC_SOFT=0 requires native BC texture support; remove this override on this GPU");
         const char *ea = getenv("DM_BC_ASTC"); nvn_bc_astc = ea ? atoi(ea) != 0 : 1;
         const char *ew = getenv("DM_BC_WORKERS"); nvn_bc_workers = ew ? MAX(1, MIN(4, atoi(ew))) : 2;
         if (nvn_bc_soft) MLOG("BC upload workers: %d (bounded, DM_BC_WORKERS); verified ASTC disk cache enabled unless DM_BC_CACHE=off", nvn_bc_workers);
@@ -466,6 +513,7 @@ void mtl_init(void) {
         if (nvn_bc_soft) MLOG("BC textures: decoded on the CPU (%s) into %s", e ? "DM_BC_SOFT" : "this GPU has no BC texture support",
                               nvn_bc_astc ? "ASTC 4x4 (BC1 / 2 / 3 / 7: a quarter of RGBA8's memory) and RG11B10F (BC6H unsigned); DM_BC_ASTC=0 for uncompressed formats" : "uncompressed formats (DM_BC_ASTC=0)");
     }
+    mtl_write_capabilities();
     g_q = [g_dev newCommandQueue];
     // A device without Metal 4 (the paravirtualized GPU of a virtual Mac, such as GitHub's macos-26 runner: no residency set, no MTL4CommandQueue) cannot run the NVN layer. The GL and
     // Vulkan layers draw on classic queues of their own and need only the device (mtl_device_classic): there the classic part starts and presents are dropped, which is all a
@@ -10195,7 +10243,8 @@ void mtl_exec(const uint8_t *p) {
 // ---------- Present: draw the swapchain texture to the CAMetalLayer; optional screenshot ----------
 static id<MTLRenderPipelineState> g_blit_pso; static MTLPixelFormat g_blit_fmt;
 static id<MTLSamplerState> g_blit_samp;
-static _Atomic uint64_t g_present_n, g_displayed_n, g_displayed_ticket;
+static _Atomic uint64_t g_present_n, g_displayed_n, g_displayed_ticket, g_displayed_frame;
+uint64_t mtl_last_displayed_frame(void) { return atomic_load(&g_displayed_frame); }
 uint64_t mtl_last_displayed_ticket(void) { return atomic_load(&g_displayed_ticket); }
 uint64_t mtl_present_count(void) { return atomic_load(&g_displayed_n); }   // Actual present count (heat attribution DM_HEAT computes the present frame rate)
 void mtl_res_snapshot(mtl_res_count *out) {
@@ -10868,7 +10917,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     [dr addPresentedHandler:^(id<MTLDrawable> d) {   // Actual presentation time (the time this frame is really put on screen, CACurrentMediaTime base)
         CFTimeInterval tt = d.presentedTime;
         g_pres[pn % PRING] = (pres_ent){pn, tt > 0 ? tt : -1};
-        if (tt > 0) { atomic_fetch_add(&g_displayed_n, 1); atomic_store(&g_displayed_ticket, pn); nvn_frame_metrics_record((uint64_t)(tt * 1e9)); }
+        if (tt > 0) { atomic_fetch_add(&g_displayed_n, 1); atomic_store(&g_displayed_ticket, pn); atomic_store(&g_displayed_frame, frame); nvn_frame_metrics_record((uint64_t)(tt * 1e9)); nvn_stutter_present(frame, pn, (uint64_t)(tt * 1e9)); }
     }];
     // Each frame is displayed for at least one present period: when the GPU completion time jitters around a 120 Hz refresh boundary, the paired "25 ms + 8.33 ms" stutter no longer appears
     if (target_ts > 0) [dr present];

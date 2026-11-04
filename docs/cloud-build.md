@@ -61,3 +61,50 @@ This static native path does not need JIT. The signing tool's entitlement
 handling and the process's actual available memory still matter. Source CI
 can verify compilation without any dump, but cannot establish BOTW playability
 or 60 fps on an A16. Those checks require the real build and device.
+
+## Host-only experimental rebuilding from an existing private output
+
+The new private `rebuild.yml` workflow is separate from the full-input builder.
+It checks source CI, then downloads **only the previous IPA and build metadata**.
+It does not download keys, original NSP/XCI or the external data image. The old
+output release remains unchanged.
+
+`scripts/rebuild_host.py` recovers the already rewritten module pieces from the
+old arm64 Mach-O using its fixups layout. It rejects changed rewrite/loader/ABI/
+profile/shader contracts, mismatched build IDs, missing shader stamps, packed
+NROs, symlinked resources and incomplete images. It keeps the original shader
+stamps and `romfs.id`, relinks the new host and recovers the modules again. Every
+relinked guest module must match its recovered original SHA-256 byte for byte.
+There is no false restamping or conversion of old shader caches to a new chain.
+
+The private output uses a version-2 manifest: the new IPA and metadata have new
+verified assets, while `romfs.img` references the unchanged original release's
+parts. References are confined to the same private repository, digest checked
+on download, and flattened across successive host rebuilds. Keep the referenced
+original release. Full-input builds still support the original version-1 format.
+
+From an updated clone on the Mac, download just the new install package:
+
+```sh
+python3 scripts/cloud_ipa.py download --repo GDS0202/NXNative-A16-Build \
+  --tag botw-output-RUN_ID --out ~/BOTW-A16-experimental \
+  --only BOTW-A16.ipa --only build.json
+```
+
+Replace `RUN_ID` with the successful private rebuild's run ID. No local Xcode is
+needed. The existing matching `romfs.img` can remain in the app's Documents; its
+identity is preserved. Keep the previous IPA and saves. The install tool replaces
+the executable's ad-hoc signature and must preserve the increased-memory-limit
+request; the OS still decides actual process headroom.
+
+The checked-in workflow template is `dm/ci/private-rebuild.yml`. Copy it only to
+the private repository as `.github/workflows/rebuild.yml`. Choose a full reviewed
+source SHA with passing tests, A16 validation and Python lint; never choose an
+unreviewed external PR. If compatibility checks refuse reuse, run the existing
+full build with the **already uploaded private input tag**. Do not re-upload it
+or install Xcode on the Mac just to work around that refusal.
+
+Source tests include synthetic front/trailing patch layouts and malformed
+archives. The real synthetic iOS link job also checks recovery against its actual
+Mach-O. A successful host rebuild proves byte preservation and linking, not
+A16 gameplay, graphics correctness, latency or 60 fps.

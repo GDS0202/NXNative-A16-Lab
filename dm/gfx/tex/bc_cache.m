@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
+#include <time.h>
 #include "bc_cache.h"
 #include "bc_soft.h"
 
@@ -20,7 +21,7 @@
 static NSString *root;
 static dispatch_queue_t writer;
 static _Atomic int busy, pressure;
-static _Atomic uint64_t hits, misses, writes, rejected, saved;
+static _Atomic uint64_t hits, misses, writes, rejected, saved, decode_calls, decode_ns, cache_ns;
 typedef struct { uint8_t magic[8]; uint64_t size; uint8_t digest[32]; char key[64]; } cache_header;
 static const uint8_t magic[8] = {'N','X','B','C','A','S','T','2'};
 
@@ -117,6 +118,15 @@ static void store(NSString *path, const uint8_t *dst, size_t n) {
         free(copy); atomic_store(&busy, 0);
     }});
 }
+static uint64_t monotonic_ns(void) {
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
+}
+static int decode(uint32_t pf, const uint8_t *src, size_t sp, uint32_t w, uint32_t h, uint8_t *dst, size_t dp) {
+    uint64_t start = monotonic_ns();
+    int result = bc_soft_decode(pf, src, sp, w, h, dst, dp);
+    atomic_fetch_add(&decode_calls, 1); atomic_fetch_add(&decode_ns, monotonic_ns() - start);
+    return result;
+}
 int nvn_bc_decode(uint32_t pf, const uint8_t *src, size_t sp, uint32_t w, uint32_t h, uint8_t *dst, size_t dp) {
     uint32_t target = bc_soft_target(pf, NULL);
     // ASTC only; tiny levels are cheaper to encode than to open a file. Limit
@@ -127,17 +137,19 @@ int nvn_bc_decode(uint32_t pf, const uint8_t *src, size_t sp, uint32_t w, uint32
     uint64_t n = (uint64_t)dp * bh;
     if ((target != 186 && target != 204) || !src || !dst || !w || !h || sp != bw * bsz || dp != bw * 16
         || n < (64u << 10) || n > BC_CACHE_MAX_ENTRY || sp > BC_CACHE_MAX_ENTRY / bh)
-        return bc_soft_decode(pf, src, sp, w, h, dst, dp);
-    init_cache(); if (!root) return bc_soft_decode(pf, src, sp, w, h, dst, dp);
+        return decode(pf, src, sp, w, h, dst, dp);
+    init_cache(); if (!root) return decode(pf, src, sp, w, h, dst, dp);
     @autoreleasepool {
+        uint64_t start = monotonic_ns();
         NSString *path = cache_path(pf, src, sp, w, h, dp);
-        if (load(path, dst, (size_t)n)) return 0;
+        int hit = load(path, dst, (size_t)n); atomic_fetch_add(&cache_ns, monotonic_ns() - start);
+        if (hit) return 0;
         atomic_fetch_add(&misses, 1);
-        int rc = bc_soft_decode(pf, src, sp, w, h, dst, dp);
+        int rc = decode(pf, src, sp, w, h, dst, dp);
         if (!rc) store(path, dst, (size_t)n);
         return rc;
     }
 }
-nvn_bc_cache_info nvn_bc_cache_stats(void) { return (nvn_bc_cache_info){atomic_load(&hits), atomic_load(&misses), atomic_load(&writes), atomic_load(&rejected), atomic_load(&saved)}; }
+nvn_bc_cache_info nvn_bc_cache_stats(void) { return (nvn_bc_cache_info){atomic_load(&hits), atomic_load(&misses), atomic_load(&writes), atomic_load(&rejected), atomic_load(&saved), atomic_load(&decode_calls), atomic_load(&decode_ns), atomic_load(&cache_ns)}; }
 void nvn_bc_cache_pressure(int level) { atomic_store(&pressure, level); }
 void nvn_bc_cache_wait(void) { init_cache(); if (writer) dispatch_sync(writer, ^{}); }

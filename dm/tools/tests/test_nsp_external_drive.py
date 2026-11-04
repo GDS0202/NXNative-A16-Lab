@@ -34,7 +34,11 @@ class ExternalDrive(unittest.TestCase):
         upd = self.tmp / f'Update [{APP | 0x800:016X}].nsp'; pfs0(upd, [])
         for p in (base, upd): (self.tmp / ('._' + p.name)).write_bytes(b'\0\x05\x16\x07' + b'\0' * 4092)   # what macOS writes: 4 KB, no PFS0
         for ext in ('xci', 'nsz', 'xcz'): (self.tmp / f'._Other [{APP | 0x800:016X}].{ext}').write_bytes(b'\0' * 4096)
-        app, fam = nsp.scan_nsps(self.tmp)   # with the `._` copies this raised (more than one game) or listed them as updates
+        app, fam = nsp.scan_nsps(self.tmp, lambda p: [{
+            'title_id': f'{APP if p == base else APP | 0x800:016X}', 'application_id': f'{APP:016X}',
+            'patch_id': f'{APP | 0x800:016X}' if p == base else None,
+            'type': 'Application' if p == base else 'Patch', 'version': 0 if p == base else 65536,
+            'metadata_sha256': ('a' if p == base else 'b') * 64}])   # with the `._` copies this raised (more than one game) or listed them as updates
         self.assertEqual(app, APP)
         self.assertEqual(fam['base'], base)
         self.assertEqual([p for _, p in fam['updates']], [upd])

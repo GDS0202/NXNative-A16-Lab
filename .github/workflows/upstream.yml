@@ -1,0 +1,73 @@
+name: Reviewed upstream observations
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+concurrency:
+  group: upstream-observations
+  cancel-in-progress: false
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+      - name: Observe public metadata only and run source-only checks
+        run: |
+          python -m unittest dm/tools/tests/test_upstream_monitor.py
+          python scripts/upstream_monitor.py --out docs/upstream-observations.json
+          python -m unittest dm/tools/tests/test_docs.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: public-upstream-observations
+          path: docs/upstream-observations.json
+          retention-days: 14
+      - name: Create a reviewable observation branch and draft PR
+        run: |
+          if git diff --quiet -- docs/upstream-observations.json; then
+            echo 'No new public observations. No code imported.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          branch="automation/upstream-observations"
+          number=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')
+          old=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" --jq '.object.sha' 2>/dev/null || true)
+          if [ -n "$old" ]; then
+            [ -n "$number" ] || { echo 'Reserved observation branch exists without an open bot PR; refusing overwrite.'; exit 1; }
+            files=$(gh pr view "$number" --json files --jq '.files[].path')
+            [ "$files" = docs/upstream-observations.json ] || { echo 'Observation branch contains manual source edits; refusing overwrite.'; exit 1; }
+          fi
+          git switch -c "$branch"
+          git add docs/upstream-observations.json
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Record public upstream candidates for review'
+          gh auth setup-git
+          if [ -n "$old" ]; then
+            git push --force-with-lease="refs/heads/$branch:$old" origin "HEAD:refs/heads/$branch"
+          else
+            git push origin "$branch"
+          fi
+          cat > "$RUNNER_TEMP/pr-body.md" <<'EOF'
+          Updates public head/PR observations only. No upstream source was downloaded, executed or merged.
+
+          Each candidate still needs license/provenance review, a scoped source branch, CPU/texture/shader checks and relevant game/device regressions. There is no automatic code integration or merge. See docs/upstream-maintenance.md.
+
+          Validation: monitor fixtures and documentation checks passed in the observation workflow.
+          EOF
+          if [ -z "$number" ]; then
+            if ! gh pr create --draft --head "$branch" --base main --title 'Review new public upstream observations' --body-file "$RUNNER_TEMP/pr-body.md"; then
+              echo '::warning::Draft PR creation failed. The observation branch and artifact are preserved; an owner can open the draft without changing repository permissions.'
+              echo "Observation branch: https://github.com/$GITHUB_REPOSITORY/tree/$branch" >> "$GITHUB_STEP_SUMMARY"
+              echo 'Draft PR was not created; inspect the preceding API error. No source code was integrated.' >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            gh pr view "$number" --json url --jq '.url' >> "$GITHUB_STEP_SUMMARY"
+          fi

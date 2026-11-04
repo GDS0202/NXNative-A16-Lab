@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "sources": [
+    {"repo":"seedds/nxnative","ref":"main","reviewed_sha":"975bb4c14456d145eb3d969814534eecdd996ce9"},
+    {"repo":"zenvyzenshiro/NXNativeWindows","ref":"main","reviewed_sha":"269d61ff974b2e8e073d7357466ae130c3f6812f"},
+    {"repo":"Jeb0978/nxnative-a16","ref":"main","reviewed_sha":"ae43b9950e19d13d66614c23992796ed288fc431"},
+    {"repo":"4ppp44/nxnative-ios17","ref":"main","reviewed_sha":"f5bf6a8e1090efa53ef92ecabed11e09b062c7c6"},
+    {"repo":"frs0n/macnativegames","ref":"main","reviewed_sha":"e58b2bd08ca54f82af1449bbfb812843f5e63de3"},
+    {"repo":"widmonstertony/nxnative","ref":"main","reviewed_sha":"93578abad6704ae95fbf60e80027469f145b02cf"},
+    {"repo":"widmonstertony/nxnative","ref":"fix/dirty-pool-retirement","reviewed_sha":"3d2c3805f71d5749da2c4686f530547041ec3f69"}
+  ]
+}

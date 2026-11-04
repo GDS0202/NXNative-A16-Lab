@@ -1,0 +1,18 @@
+name: Source or tool bug
+description: A reproducible failure with a synthetic example when possible
+body:
+  - type: markdown
+    attributes:
+      value: Keep keys, games, saves and private build artifacts out of this issue.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Source revision, environment and minimal reproduction
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true

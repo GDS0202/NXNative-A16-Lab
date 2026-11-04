@@ -21,7 +21,18 @@ The offsets of each level and layer within the storage, and the block height and
 
 ## BC textures
 
-Only GPUs with BC compressed textures are supported (`supportsBCTextureCompression` of `MTLDevice`: Apple silicon Macs and the latest iPhones), so BC textures are created and uploaded as BC; there is no decompression path. A BC texture is never a render target and its raw blocks are not sampled through an uncompressed view (Metal has no such views; Breath of the Wild encodes one 32×32 BC4 texture on the GPU, GitHub issue #4).
+This fork queries `supportsBCTextureCompression`. Supported GPUs keep native BC.
+Others use the bounded software conversion path: BC1/2/3/7 become ASTC4x4
+(LDR/sRGB preserved), BC4/5 use scalar/channel formats, and HDR formats keep
+appropriate HDR targets. Converted ASTC uploads have an integrity-checked,
+content/layout/revision-keyed cache. Fenced staging, disk/write limits and
+pressure behavior are described in [the A16 audit](../../../docs/a16.md).
+
+GPU-written compressed textures remain a distinct correctness problem: an
+uncompressed integer view writes encoded blocks, not the already decoded R8
+pixels. The current software-BC path has incomplete backing semantics there;
+see [the new review](../../../docs/audit-2026-11-04.md). Do not treat the CPU
+upload fallback as proof that every dynamically encoded texture works on A16.
 
 ## Tests
 

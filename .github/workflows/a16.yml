@@ -20,6 +20,14 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.14'
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Internal package metadata reader and synthetic CNMT boundary tests
+        run: |
+          dotnet build dm/tools/nx_extract -c Release --nologo
+          dotnet run --project dm/tools/tests/cnmt -c Release
+          python -m unittest dm/tools/tests/test_nsp_scan.py dm/tools/tests/test_nsp_nsz.py dm/tools/tests/test_nsp_external_drive.py dm/tools/tests/test_nsp_incremental.py
       - run: python -m pip install texture2ddecoder Pillow
       - name: Exact BC upload bytes, independent ASTC decode, odd mips and pitches
         run: python -m unittest -v dm/gfx/tests/test_bc_soft.py
@@ -30,6 +38,13 @@ jobs:
           name: bc-component-benchmark
           path: bc-benchmark.json
           retention-days: 7
+      - name: Bounded asynchronous trace under ASan and UBSan
+        run: |
+          clang -O2 -g -pthread -fsanitize=address,undefined -DNVN_STUTTER_LIMIT=8192 dm/gfx/tests/t_stutter.c dm/gfx/nvn/nvn_stutter.c -o /tmp/stutter
+          /tmp/stutter
+          /tmp/stutter on
+          /tmp/stutter normal
+          python -m unittest dm/tools/tests/test_stutter_analyze.py
       - name: Presentation statistics under ASan and UBSan
         run: |
           clang -O2 -g -pthread -fsanitize=address,undefined dm/gfx/tests/t_frame_metrics.c dm/gfx/nvn/nvn_frame_metrics.c -o /tmp/frame-metrics
@@ -70,3 +85,9 @@ jobs:
         run: |
           clang -O1 -g -pthread -fsanitize=thread dm/gfx/tests/t_frame_metrics.c dm/gfx/nvn/nvn_frame_metrics.c -o /tmp/frame-metrics
           /tmp/frame-metrics
+      - name: Bounded asynchronous trace under ThreadSanitizer
+        run: |
+          clang -O1 -g -pthread -fsanitize=thread -DNVN_STUTTER_LIMIT=8192 dm/gfx/tests/t_stutter.c dm/gfx/nvn/nvn_stutter.c -o /tmp/stutter
+          /tmp/stutter
+          /tmp/stutter on
+          /tmp/stutter normal

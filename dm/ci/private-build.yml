@@ -81,14 +81,17 @@ jobs:
       - name: Match the data image and record the build
         run: |
           python - <<'PY'
-          import json,os,subprocess
+          import json,os,re,subprocess
           from pathlib import Path
           temp=Path(os.environ['RUNNER_TEMP']); root=temp/'inputs/game/01007EF00011E000_build'
           image=root/'extract/v1114112/RomFS.img'
           if not image.is_file(): raise SystemExit('Missing strictly matched BOTW 1.9.0 image')
           image.rename(temp/'output/romfs.img')
+          project=Path('source/dm/ios/project.yml').read_text()
+          cpu=re.search(r'-mcpu=([a-z0-9-]+)',project)[1]; tune=re.search(r'-mtune=([a-z0-9-]+)',project)
           meta={'source':os.environ['SOURCE_REVISION'],'game':'01007EF00011E000','package':'v1114112',
-                'main_build':'cd57b23fa4bbad65803d9788c01821ee','cpu':'apple-a16','gpu_archives':['g14p','g15p'],
+                'main_build':'cd57b23fa4bbad65803d9788c01821ee','cpu':cpu,
+                'cpu_tune':tune[1] if tune else cpu,'gpu_archives':['g14p','g15p'],
                 'device_validation':'pending','xcode':subprocess.check_output(['xcodebuild','-version'],text=True),
                 'metal':subprocess.check_output(['xcrun','-sdk','iphoneos','metal','--version'],text=True)}
           (temp/'output/build.json').write_text(json.dumps(meta,indent=2)+'\n')

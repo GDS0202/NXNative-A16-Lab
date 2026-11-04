@@ -23,23 +23,32 @@ using LibHac.Tools.Fs;
 using LibHac.Tools.FsSystem;
 using LibHac.Tools.FsSystem.NcaUtils;
 using LibHac.Tools.FsSystem.RomFs;
-using LibHac.Tools.Ncm;
+using System.Text.Json;
 using Path = System.IO.Path;
 
 static class P {
     [DllImport("libc", SetLastError = true)] static extern int clonefile(string src, string dst, uint flags);
 
+    static KeySet ReadKeys(string path) {
+        TextWriter stdout = Console.Out, stderr = Console.Error;
+        try {
+            Console.SetOut(TextWriter.Null); Console.SetError(TextWriter.Null);
+            return ExternalKeyReader.ReadKeyFile(path);
+        } catch (Exception) { throw new PackageMetadataException("cannot read the supplied key file; check its format and required key generation"); }
+        finally { Console.SetOut(stdout); Console.SetError(stderr); }
+    }
     static int Main(string[] a) {
+        if (a.Length == 3 && a[1] == "--inspect") return InspectCommand(a);
         bool manifest = Array.IndexOf(a, "--manifest") >= 0; a = Array.FindAll(a, s => s != "--manifest");
         bool image = Array.IndexOf(a, "--romfs-image") >= 0; a = Array.FindAll(a, s => s != "--romfs-image");
         g_allow = Array.IndexOf(a, "--allow-damaged") >= 0; a = Array.FindAll(a, s => s != "--allow-damaged");
         if (a.Length < 4) { Console.Error.WriteLine("usage: nx_extract <prod.keys> <base.nsp> <update.nsp|-> <out dir> [base RomFS dir] [--romfs-image|--manifest] [--allow-damaged]\n       nx_extract <prod.keys> --aoc <dlc.nsp> <out dir or image> [--romfs-image]"); return 2; }
-        KeySet ks = ExternalKeyReader.ReadKeyFile(a[0]);
-        if (a[1] == "--aoc") return Aoc(ks, a[2], a[3], image);
-        var basePkg = OpenNsp(ks, a[1], ContentMetaType.Application); var updPkg = a[2] == "-" ? null : OpenNsp(ks, a[2]);
+        KeySet ks = ReadKeys(a[0]);
+        if (a[1] == "--aoc") return Aoc(ks, a[2], a[3], image, a.Length > 4 && a[4].StartsWith("--title-id=") ? a[4][11..] : null);
+        var basePkg = OpenNsp(ks, a[1], ContentMetaType.Application); var updPkg = a[2] == "-" ? null : OpenNsp(ks, a[2], ContentMetaType.Patch);
         Nca baseProg = Pick(basePkg, NcaContentType.Program) ?? throw new Exception("no Program NCA in the base NSP");
         Nca updProg = updPkg == null ? null : Pick(updPkg, NcaContentType.Program, baseProg.Header.TitleId) ?? throw new Exception("no Program NCA of the base game's program in the update NSP");
-        Nca ctrl = Pick(updPkg ?? basePkg, NcaContentType.Control, baseProg.Header.TitleId);
+        Nca ctrl = Pick(updPkg ?? basePkg, NcaContentType.Control, baseProg.Header.TitleId) ?? Pick(basePkg, NcaContentType.Control, baseProg.Header.TitleId);
         Console.WriteLine($"title {baseProg.Header.TitleId:x16}" + (updProg != null ? $", update {updProg.Header.TitleId:x16}" : ""));
         string outDir = a[3], cmpDir = a.Length > 4 ? a[4] : null;
         if (ctrl != null) {   // control data (NACP): display version and game name; a raw copy goes to <output dir>/control.nacp for naming the app
@@ -91,8 +100,8 @@ static class P {
     }
 
     // DLC NSP: one data NCA (content type PublicData / Data) + a meta NCA + the ticket; only the data NCA's RomFS is written
-    static int Aoc(KeySet ks, string nsp, string outDir, bool image) {
-        var pkg = OpenNsp(ks, nsp);
+    static int Aoc(KeySet ks, string nsp, string outDir, bool image, string titleId) {
+        var pkg = OpenNsp(ks, nsp, ContentMetaType.AddOnContent, titleId);
         Nca data = Pick(pkg, NcaContentType.PublicData) ?? Pick(pkg, NcaContentType.Data) ?? throw new Exception("no data NCA in the DLC NSP");
         Console.WriteLine($"add-on content {data.Header.TitleId:x16}");
         Directory.CreateDirectory(image ? Path.GetDirectoryName(outDir) : outDir);
@@ -102,50 +111,113 @@ static class P {
         return Damaged();
     }
 
-    // Open an NSP (PFS0) or the secure partition of an XCI, import the common tickets, list all NCAs. With a content meta type, only the NCAs that the package's content metas of
-    // that type list (when it has one): a cartridge dump with its update on it (1G+1U) holds the update's NCAs beside the base game's, its Program NCA under the same title ID
-    static List<Nca> OpenNsp(KeySet ks, string path, ContentMetaType? only = null) {
-        IFileSystem pfs; var st0 = new LocalStorage(path, FileAccess.Read);
-        byte[] magic = new byte[4]; st0.Read(0x100, magic).ThrowIfFailure();
-        if (System.Text.Encoding.ASCII.GetString(magic) == "HEAD") {   // XCI: the card header's magic at 0x100
-            var xci = new Xci(ks, st0);
-            if (!xci.HasPartition(XciPartitionType.Secure)) throw new Exception($"no secure partition in {path}");
+    sealed class PackageNca {
+        public string Id; public Nca Nca; public long Size; public bool Compressed;
+    }
+    // Two passes: import every common ticket before opening any encrypted NCA.
+    // NCZ retains its NCA header; only the uncompressed meta NCA is opened here.
+    static List<PackageNca> OpenPackage(KeySet ks, string path) {
+        IFileSystem pfs; var storage = new LocalStorage(path, FileAccess.Read);
+        byte[] magic = new byte[4]; storage.Read(0x100, magic).ThrowIfFailure();
+        if (System.Text.Encoding.ASCII.GetString(magic) == "HEAD") {
+            var xci = new Xci(ks, storage);
+            if (!xci.HasPartition(XciPartitionType.Secure)) throw new PackageMetadataException("XCI has no secure partition");
             pfs = xci.OpenPartition(XciPartitionType.Secure);
         } else {
-            var p = new PartitionFileSystem(); p.Initialize(st0).ThrowIfFailure(); pfs = p;
+            var partition = new PartitionFileSystem(); partition.Initialize(storage).ThrowIfFailure(); pfs = partition;
         }
-        var ncas = new List<Nca>(); var ids = new List<string>();   // ids: content IDs (the file names' hex)
-        foreach (DirectoryEntryEx e in pfs.EnumerateEntries("*", SearchOptions.Default)) {
+        var entries = new List<DirectoryEntryEx>(pfs.EnumerateEntries("*", SearchOptions.Default));
+        foreach (var e in entries) if (e.Name.EndsWith(".tik", StringComparison.OrdinalIgnoreCase)) {
             using var f = new UniqueRef<IFile>();
             pfs.OpenFile(ref f.Ref, e.FullPath.ToU8Span(), OpenMode.Read).ThrowIfFailure();
-            IStorage st = f.Release().AsStorage();
-            if (e.Name.EndsWith(".tik", StringComparison.OrdinalIgnoreCase)) {
-                byte[] t = new byte[0x2c0]; st.Read(0, t).ThrowIfFailure();
-                if (t[0x281] != 0) { Console.Error.WriteLine($"[RED] {e.Name} is not a common ticket; supply the title key separately"); continue; }
-                ks.ExternalKeySet.Add(new RightsId(t.AsSpan(0x2a0, 0x10)), new AccessKey(t.AsSpan(0x180, 0x10))).ThrowIfFailure();
-            } else if (e.Name.EndsWith(".nca", StringComparison.OrdinalIgnoreCase)) { ncas.Add(new Nca(ks, st)); ids.Add(e.Name[..e.Name.IndexOf('.')].ToLowerInvariant()); }
+            byte[] ticket = new byte[0x2c0]; f.Get.Read(out long read, 0, ticket, ReadOption.None).ThrowIfFailure();
+            if (read != ticket.Length || ticket[0x281] != 0) throw new PackageMetadataException("a common ticket is required (personalized tickets are unsupported)");
+            ks.ExternalKeySet.Add(new RightsId(ticket.AsSpan(0x2a0, 0x10)), new AccessKey(ticket.AsSpan(0x180, 0x10))).ThrowIfFailure();
         }
-        if (only == null) return ncas;
-        var listed = new HashSet<string>();
-        foreach (Nca n in ncas) {
-            if (n.Header.ContentType != NcaContentType.Meta) continue;
-            IFileSystem mfs = n.OpenFileSystem(NcaSectionType.Data, IntegrityCheckLevel.ErrorOnInvalid);
-            foreach (DirectoryEntryEx e in mfs.EnumerateEntries("*.cnmt", SearchOptions.Default)) {
-                using var f = new UniqueRef<IFile>();
-                mfs.OpenFile(ref f.Ref, e.FullPath.ToU8Span(), OpenMode.Read).ThrowIfFailure();
-                var cnmt = new Cnmt(f.Release().AsStream());
-                if (cnmt.Type == only) foreach (CnmtContentEntry c in cnmt.ContentEntries) listed.Add(Convert.ToHexString(c.NcaId).ToLowerInvariant());
+        var result = new List<PackageNca>(); var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var e in entries) {
+            bool compressed = e.Name.EndsWith(".ncz", StringComparison.OrdinalIgnoreCase);
+            if (!compressed && !e.Name.EndsWith(".nca", StringComparison.OrdinalIgnoreCase)) continue;
+            string id = e.Name.Split('.')[0].ToLowerInvariant();
+            if (id.Length != 32 || !Array.TrueForAll(id.ToCharArray(), Uri.IsHexDigit) || !ids.Add(id))
+                throw new PackageMetadataException("NCA content IDs are invalid or duplicated");
+            using var f = new UniqueRef<IFile>();
+            pfs.OpenFile(ref f.Ref, e.FullPath.ToU8Span(), OpenMode.Read).ThrowIfFailure();
+            var nca = new Nca(ks, f.Release().AsStorage());
+            result.Add(new PackageNca { Id = id, Nca = nca, Size = e.Size, Compressed = compressed });
+        }
+        return result;
+    }
+    static List<PackageRecord> ReadMetadata(List<PackageNca> files) {
+        var records = new List<PackageRecord>(); var seen = new HashSet<string>();
+        foreach (var item in files) {
+            if (item.Nca.Header.ContentType != NcaContentType.Meta) continue;
+            if (item.Compressed) throw new PackageMetadataException("compressed meta NCA is unsupported; decompress the package first");
+            using IFileSystem fs = item.Nca.OpenFileSystem(NcaSectionType.Data, IntegrityCheckLevel.ErrorOnInvalid);
+            foreach (var entry in fs.EnumerateEntries("*.cnmt", SearchOptions.Default)) {
+                if (entry.Size < 0x40 || entry.Size > PackageMetadata.MaxBytes) throw new PackageMetadataException("invalid CNMT length");
+                using var file = new UniqueRef<IFile>();
+                fs.OpenFile(ref file.Ref, entry.FullPath.ToU8Span(), OpenMode.Read).ThrowIfFailure();
+                byte[] bytes = new byte[entry.Size];
+                file.Get.Read(out long read, 0, bytes, ReadOption.None).ThrowIfFailure();
+                if (read != bytes.Length) throw new PackageMetadataException("truncated CNMT");
+                var record = PackageMetadata.Parse(bytes);
+                if (!seen.Add(record.TitleId + ":" + record.Version)) throw new PackageMetadataException("duplicate content meta");
+                bool primary = false;
+                foreach (var content in record.Contents) {
+                    var actual = files.Find(n => n.Id == content.Id);
+                    // Delta fragments are optional for a full patch installation.
+                    if (actual == null && content.Type == 6) continue;
+                    if (actual == null || (!actual.Compressed && (ulong)actual.Size != content.Size))
+                        throw new PackageMetadataException("CNMT references a missing or truncated NCA");
+                    if (content.Type == 1) {
+                        ulong expected = Convert.ToUInt64(record.ApplicationId, 16) + content.IdOffset;
+                        if (actual.Nca.Header.ContentType != NcaContentType.Program || actual.Nca.Header.TitleId != expected)
+                            throw new PackageMetadataException("Program NCA does not match its content meta association");
+                        primary |= content.IdOffset == 0;
+                    }
+                }
+                if (record.Type != "AddOnContent" && !primary) throw new PackageMetadataException("content meta has no primary Program NCA (delta-only or incomplete package)");
+                records.Add(record);
             }
         }
-        if (listed.Count == 0) return ncas;
-        var kept = new List<Nca>(); int other = 0;   // the meta NCAs list the others, not themselves
-        for (int i = 0; i < ncas.Count; i++) if (listed.Contains(ids[i])) kept.Add(ncas[i]); else if (ncas[i].Header.ContentType != NcaContentType.Meta) other++;
-        if (!kept.Exists(n => n.Header.ContentType == NcaContentType.Program)) {   // file names that are not content IDs (renamed NCAs): nothing matches, so read every NCA as before
-            Console.WriteLine($"[RED] no NCA of {Path.GetFileName(path)} matches its {only} content meta by name (renamed NCA files?); reading all {ncas.Count}");
-            return ncas;
+        if (records.Count == 0) throw new PackageMetadataException("no readable content meta NCA; filenames and ticket names cannot establish package identity");
+        return records;
+    }
+    static int InspectCommand(string[] args) {
+        try {
+            List<PackageRecord> records;
+            TextWriter stdout = Console.Out, stderr = Console.Error;
+            try {
+                // Suppress library key-parser diagnostics as well as exception
+                // stacks. Only our constant, key-safe messages leave this helper.
+                Console.SetOut(TextWriter.Null); Console.SetError(TextWriter.Null);
+                KeySet keys = ReadKeys(args[0]);
+                records = ReadMetadata(OpenPackage(keys, args[2]));
+            } finally { Console.SetOut(stdout); Console.SetError(stderr); }
+            Console.WriteLine(JsonSerializer.Serialize(new { schema = 1, verification = "metadata-only", records },
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower }));
+            return 0;
+        } catch (PackageMetadataException e) { Console.Error.WriteLine("[RED] package metadata: " + e.Message); return 3; }
+        catch (Exception) {
+            // Never forward a crypto exception, key values, absolute paths or a
+            // stack trace to a shareable diagnostic. Extraction checks data later.
+            Console.Error.WriteLine("[RED] cannot verify package metadata: check your keys, common ticket and complete NSP/XCI; no filename fallback was used");
+            return 3;
         }
-        if (other > 0) Console.WriteLine($"leaving out {other} NCAs of {Path.GetFileName(path)} that its {only} content meta does not list (an update on the cartridge)");
-        return kept;
+    }
+    static List<Nca> OpenNsp(KeySet keys, string path, ContentMetaType? only = null, string titleId = null) {
+        var files = OpenPackage(keys, path); var records = ReadMetadata(files);
+        string kind = (only ?? ContentMetaType.Application).ToString();
+        var matches = records.FindAll(r => r.Type == kind && (titleId == null || r.TitleId.Equals(titleId, StringComparison.OrdinalIgnoreCase)));
+        if (matches.Count != 1) throw new PackageMetadataException("package has no unique " + kind + " content meta; select one application per input folder");
+        var selected = new HashSet<string>(); foreach (var c in matches[0].Contents) selected.Add(c.Id);
+        var result = new List<Nca>();
+        foreach (var file in files) if (selected.Contains(file.Id)) {
+            if (file.Compressed) throw new PackageMetadataException("decompress NSZ/XCZ before extraction");
+            result.Add(file.Nca);
+        }
+        return result;
     }
     // A multi-program application has a Program and a Control NCA per program index (ROMANCE OF THE THREE KINGDOMS 8 REMAKE: its update 1.1.3 adds a whole second program,
     // title ID …0001, beside the game's patch, …0000): with no title ID the lowest one (program index 0, the game), else the NCA of that title ID

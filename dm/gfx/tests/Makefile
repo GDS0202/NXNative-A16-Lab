@@ -47,6 +47,8 @@ t_dirty_slots: t_dirty_slots.c ../nvn/nvn_dirty.c ../../host/crash.c ../nvn/nvn_
 	clang $(CFLAGS) -o $@ t_dirty_slots.c ../../host/crash.c ../nvn/nvn_dirty.c
 t_dirty_race: t_dirty_race.c ../nvn/nvn_dirty.c ../../host/crash.c ../nvn/nvn_dirty.h $(GAME_H)
 	clang $(CFLAGS) -o $@ t_dirty_race.c ../../host/crash.c
+t_dirty_retire_race: t_dirty_retire_race.c ../nvn/nvn_dirty.c ../../host/crash.c ../nvn/nvn_dirty.h $(GAME_H)
+	clang $(CFLAGS) -o $@ t_dirty_retire_race.c ../../host/crash.c
 t_builtin: t_builtin.m ../nvn/nvn_builtin.h
 	clang -O1 -g -Wall -fobjc-arc -o $@ t_builtin.m -framework Metal -framework Foundation
 t_vin: t_vin.m
@@ -357,3 +359,10 @@ t_frame_metrics: t_frame_metrics.c ../nvn/nvn_frame_metrics.c ../nvn/nvn_frame_m
 
 t_warm_budget: t_warm_budget.m ../nvn/nvn_warm_budget.h
 	clang $(CFLAGS) -fobjc-arc -o $@ t_warm_budget.m -framework Foundation
+
+t_stutter: t_stutter.c ../nvn/nvn_stutter.c ../nvn/nvn_stutter.h
+	clang $(CFLAGS) -pthread -DNVN_STUTTER_LIMIT=8192 -o $@ t_stutter.c ../nvn/nvn_stutter.c
+check_t_stutter: t_stutter
+	./t_stutter
+	./t_stutter on
+	./t_stutter normal

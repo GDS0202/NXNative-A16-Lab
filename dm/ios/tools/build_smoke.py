@@ -7,6 +7,7 @@ is a compile/link fixture, not a runnable game. All Xcode output stays under
 --output, which must name a new directory; keep it on a scratch drive locally.
 """
 import argparse
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -48,7 +49,7 @@ def main():
         (patched / f'{name}.patched.bin').write_bytes(bytes(0x10000))
         fixups = patched / f'{name}.fixups.tsv'
         fixups.write_text('# TEXT_END 0x4000\n# PATCH_OFF 0xc000\n'
-                          '# KEY_PAGE_OFF 0x8000\n# KEY_PAGE_SIZE 0x4000\n')
+                          '# KEY_PAGE_OFF 0x8000\n# KEY_PAGE_SIZE 0x4000\n# BUILD_ID ' + '0' * 32 + '\n')
         shutil.copyfile(fixups, tables / fixups.name)
 
     env = dict(os.environ, GAME=profile.id, DM_GAME=profile.id,
@@ -92,6 +93,18 @@ def main():
     executable = app / info['CFBundleExecutable']
     if not executable.is_file():
         raise RuntimeError(f'No linked executable: {executable}')
+    # Validate recovery against the real linker output, beyond synthetic wire
+    # parsing: changing the host's layout must preserve each embedded guest byte.
+    spec = importlib.util.spec_from_file_location('rebuild_host', REPO / 'scripts/rebuild_host.py')
+    if spec is None or spec.loader is None: raise ImportError('rebuild_host')
+    rebuild_host = importlib.util.module_from_spec(spec); spec.loader.exec_module(rebuild_host)
+    recovered = root / 'recovered'; recovered.mkdir()
+    sections = rebuild_host.macho_sections(executable)
+    for name in modules:
+        actual = rebuild_host.recover_module(executable, sections, name, patched / f'{name}.fixups.tsv', recovered / f'{name}.patched.bin')
+        if actual != rebuild_host.digest_file(patched / f'{name}.patched.bin'):
+            raise RuntimeError('Synthetic embedded module recovery changed its bytes')
+
     for source, packed in ((romfs / marker, app / 'romfs' / marker),
                            (shaders / marker, app / 'msl' / f'b-{chain}' / marker)):
         if source.read_bytes() != packed.read_bytes():

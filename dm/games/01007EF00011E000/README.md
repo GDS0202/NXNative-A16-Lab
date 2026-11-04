@@ -238,3 +238,15 @@ adds [bounded cached BC conversion](../../../docs/reference/rendering.md#bounded
 and defaults to handheld 1280x720 internally and a separate 720p output. There
 is no new A16 BOTW gameplay measurement. The cloud builder requires the exact
 registered 1.9.0 module builds instead of silently deriving a different profile.
+
+## A16 experimental follow-up (2026-11-04)
+
+The private 1.9.0 build from the A16 lab fork boots and plays according to its
+user, with purple artifacts and intermittent stalls. No device trace or measured
+FPS baseline has been supplied. Source CI and synthetic component tests do not
+upgrade that report to validated gameplay.
+
+Found on this game: the common tracker has the [retired-pool protection race](../../../docs/reference/nvn-objects.md#a-retired-pool-remains-read-only).
+Its correction is covered by a targeted CPU test, not yet an iPad gameplay test.
+The new [recording and A/B route](../../../docs/performance.md) is the acceptance
+path before changing worker defaults or claiming reduced stutter.

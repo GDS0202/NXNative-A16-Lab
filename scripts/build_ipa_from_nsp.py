@@ -427,48 +427,101 @@ def is_package(path):   # what nx_extract's OpenNsp opens: an XCI / XCZ by the c
     return h[:4] == b'PFS0' or h[0x100:] == b'HEAD'
 
 
-def title_of(path):   # the ticket name (the first 16 digits of the rights ID = title ID), else [title ID] in the file name
-    for n in pfs0_names(path):   # the ticket first: a file name's tag can be wrong (FFT's base NSP is tagged …0001, its ticket is …0000)
-        if re.match(r'[0-9A-Fa-f]{32}\.tik$', n): return int(n[:16], 16)
-    m = re.search(r'\[([0-9A-Fa-f]{16})\]', path.name)
-    return int(m.group(1), 16) if m else None
+COMPRESSED = {'.nsz': '.nsp', '.xcz': '.xci'}
 
 
-def version_of(path):
-    m = re.search(r'\[v(\d+)\]', path.name)
-    return int(m.group(1)) if m else None
+def inspect_package(nx, keys, path, env):
+    """Read only integrity-checked CNMT metadata. Never infer identity from names.
+
+    The helper intentionally does not claim a full NCA payload hash audit:
+    extraction still validates the sections it reads with ErrorOnInvalid.
+    """
+    try:
+        result = subprocess.run([str(nx), str(keys), '--inspect', str(path)], env=env,
+                                capture_output=True, text=True, errors='replace', timeout=120)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise BuildError('package metadata inspection could not run; check the .NET 10 SDK') from e
+    if result.returncode:
+        # The helper emits fixed, key-safe diagnostics, never a crypto stack trace.
+        detail = next((line for line in result.stderr.splitlines() if line.startswith('[RED]')), '')
+        raise BuildError(f'cannot identify {path.name!r} from internal metadata. {detail}')
+    try:
+        data = json.loads(result.stdout)
+        if data.get('schema') != 1 or data.get('verification') != 'metadata-only': raise ValueError('schema')
+        records = data['records']
+        if not isinstance(records, list) or not 1 <= len(records) <= 1024: raise ValueError('records')
+        return records
+    except (ValueError, KeyError, TypeError) as e:
+        raise BuildError('invalid package metadata response; rebuild nx_extract') from e
 
 
-COMPRESSED = {'.nsz': '.nsp', '.xcz': '.xci'}   # nsz's compressed NSP / XCI and what nsz -D makes of them
+def input_inspector(repo, nsp_dir, keys, env):
+    """Build the small extractor once, before a title ID or game profile is known."""
+    if not shutil.which('dotnet', path=env.get('PATH')): raise BuildError('internal input detection needs the .NET 10 SDK (dotnet)')
+    work = nsp_dir / '_nx_inputs'; logs = work / 'logs'; logs.mkdir(parents=True, exist_ok=True)
+    source = repo / 'dm/tools/nx_extract'
+    stamp = work / 'extractor.key'
+    key = fingerprint(('files', sorted(source.glob('*.cs')) + [source / 'nx_extract.csproj']))
+    nx = work / 'tools/nx_extract/nx_extract'
+    if not nx.is_file() or reused(stamp, key) is None:
+        nx = build_nx_extract(repo, work, logs, env); stamp.write_text(key + '\n')
+    return lambda path: inspect_package(nx, keys, path, env)
 
 
-def scan_nsps(nsp_dir):
-    """Group by game: {application title ID: {'base': path, 'updates': [(version, path)], 'dlc': [(title ID, version, path)]}}. An NSZ / XCZ is listed as it is (its ticket names
-    the title as an NSP's does) and converted afterwards (decompress_nsz)"""
-    fams, unknown = {}, []
-    for p in sorted([*nsp_dir.glob('*.nsp'), *nsp_dir.glob('*.xci'), *nsp_dir.glob('*.nsz'), *nsp_dir.glob('*.xcz')]):   # a base game may be a cartridge dump (.xci: Monster Hunter Rise); nx_extract reads its secure partition
-        if p.name.startswith('._'): continue   # an AppleDouble file: on an exFAT / FAT drive macOS keeps a file's extended attributes (a download's quarantine flag) in `._<name>`, one beside each game file; is_package would skip it too, with a line for each
-        if p.stat().st_size == 0:   # an empty file left by an incomplete download (the Zelda BotW folder holds a 0-byte DLC NSP next to the complete (1).nsp)
-            say(f'skipping an empty file: {p.name}'); continue
-        if not is_package(p):   # title_of falls back to the name's [title ID]: without this, any file with a game's extension and tag counted as one of its packages
-            say(f'skipping {p.name}: neither an NSP (PFS0) nor an XCI (HEAD at 0x100)'); continue
-        if p.suffix in COMPRESSED and p.with_suffix(COMPRESSED[p.suffix]).exists():
-            say(f'skipping {p.name}: {p.with_suffix(COMPRESSED[p.suffix]).name} is beside it'); continue
-        tid = title_of(p)
-        if tid is None: unknown.append(p); continue
-        low = tid & 0xFFF   # base …000, update …800, DLC = base + 0x1000 + index
-        app = tid if low == 0 else tid & ~0xFFF if low == 0x800 else (tid & ~0xFFF) - 0x1000
-        f = fams.setdefault(app, {'base': None, 'updates': [], 'dlc': []})
-        if low == 0: f['base'] = p
-        elif low == 0x800: f['updates'].append((version_of(p), p))
-        else: f['dlc'].append((tid, version_of(p), p))
-    if len(fams) == 1 and len(unknown) == 1 and next(iter(fams.values()))['base'] is None:   # a base game converted from a cartridge may have neither tags nor a ticket; build IDs are checked afterwards
-        next(iter(fams.values()))['base'] = unknown[0]
-    if not fams: raise BuildError(f'no NSP with a readable title ID in {nsp_dir}')
-    if len(fams) > 1: raise BuildError('more than one game in the folder, keep one game per folder: ' + ', '.join(f'{t:016X}' for t in fams))
-    app, fam = next(iter(fams.items()))
-    if fam['base'] is None: raise BuildError(f'no base game NSP found in {nsp_dir} (title ID {app:016X})')
-    return app, fam
+def scan_nsps(nsp_dir, inspect=None, *, paths=None):
+    """Classify Application/Patch/AddOnContent CNMTs, including bundled XCI.
+
+    Ticket rights IDs and [BASE]/[vN]/title tags are never identity evidence.
+    A reader is injected for synthetic tests; production uses nx_extract.
+    """
+    if inspect is None: raise BuildError('internal metadata inspection is required; provide keys and nx_extract')
+    candidates = paths if paths is not None else nsp_dir.iterdir()
+    candidates = sorted(p for p in candidates if p.is_file() and p.suffix.lower() in ('.nsp', '.xci', '.nsz', '.xcz'))
+    families, identities = {}, {}
+    for path in candidates:
+        if path.name.startswith('._'): continue
+        if not path.stat().st_size: say(f'skipping an empty file: {path.name}'); continue
+        if not is_package(path): say(f'skipping {path.name}: neither an NSP (PFS0) nor an XCI (HEAD at 0x100)'); continue
+        records = inspect(path)
+        for record in records:
+            try:
+                for name in ('title_id', 'application_id'):
+                    if not re.fullmatch('[0-9A-Fa-f]{16}', record[name]): raise ValueError('title ID')
+                title, app = (int(record[name], 16) for name in ('title_id', 'application_id'))
+                version, kind = record['version'], record['type']
+                if type(version) is not int or not 0 <= version < 2**32: raise ValueError('version')
+                digest = record['metadata_sha256']
+                if not re.fullmatch('[0-9a-f]{64}', digest): raise ValueError('digest')
+                if not title or not app or kind not in ('Application', 'Patch', 'AddOnContent'): raise ValueError('type')
+                if kind == 'Application' and (title != app or not re.fullmatch('[0-9A-Fa-f]{16}', record['patch_id'])): raise ValueError('association')
+            except (KeyError, ValueError, TypeError) as e:
+                raise BuildError('invalid internal content metadata; no filename fallback is permitted') from e
+            family = families.setdefault(app, {'Application': {}, 'Patch': {}, 'AddOnContent': {}})
+            identity = (title, version)
+            previous = identities.get(identity)
+            if previous:
+                old_path, old_record = previous
+                if old_record != record:
+                    raise BuildError(f'conflicting content metadata for {title:016X} v{version}; keep one verified package')
+                # Byte-identical CNMT: prefer a complete uncompressed copy. This
+                # does not trust the stem and still validates both containers.
+                if path.suffix.lower() in COMPRESSED or old_path.suffix.lower() not in COMPRESSED: continue
+            identities[identity] = (path, record)
+            family[kind][identity] = (path, record)
+    if not families: raise BuildError('no package with verified internal content metadata was found')
+    if len(families) != 1:
+        raise BuildError('input metadata names more than one application (base/update/DLC mismatch): ' + ', '.join(f'{t:016X}' for t in sorted(families)))
+    app, family = next(iter(families.items()))
+    bases = list(family['Application'].values())
+    if len(bases) != 1: raise BuildError(f'expected one base Application CNMT for {app:016X}, found {len(bases)}; a Patch is not a base game')
+    base, base_meta = bases[0]
+    patch_id = int(base_meta['patch_id'], 16)
+    for _, record in family['Patch'].values():
+        if int(record['title_id'], 16) != patch_id:
+            raise BuildError('update CNMT does not match the base Application CNMT patch ID')
+    return app, {'base': base,
+                 'updates': sorted((v, p) for (_, v), (p, _) in family['Patch'].items()),
+                 'dlc': sorted((t, v, p) for (t, v), (p, _) in family['AddOnContent'].items())}
 
 
 NSZ_MAIN = "import sys; sys.argv[0] = 'nsz'; from nsz import main; main()"   # the nsz tool of the Python running this file (Spyder does not have its bin folder on PATH)
@@ -502,7 +555,7 @@ def decompress_nsz(nsp_dir, app, fam, keys, env):
     and the file is moved into nsp/ only when nsz exits 0, so a partial one is never taken for a whole one; a conversion is reused while its source has the same name, size and
     modification time. nsz -D prints an NCA hash mismatch but goes on and exits 0: nx_extract's hash check catches a damaged file (ALLOW_DAMAGED)"""
     paths = [fam['base']] + [p for _, p in fam['updates']] + [p for _, _, p in fam['dlc']]
-    todo = [p for p in paths if p.suffix in COMPRESSED]
+    todo = [p for p in paths if p.suffix.lower() in COMPRESSED]
     if not todo: return fam
     nsz, keys_opt = nsz_command(env), []
     if nsz[0] != sys.executable: keys_opt = ['--keys', keys.resolve()]   # a standalone nsz looks for keys beside itself, not in cwd: it takes them by --keys (nsz_command)
@@ -510,7 +563,7 @@ def decompress_nsz(nsp_dir, app, fam, keys, env):
     PROG.plan(1); PROG.stage('decompress NSZ', done=0, total=len(todo))
     conv, made = {}, 0
     for i, p in enumerate(todo):
-        dst = out / (p.stem + COMPRESSED[p.suffix]); keyfile = dst.with_name(dst.name + '.key')
+        dst = out / (p.stem + COMPRESSED[p.suffix.lower()]); keyfile = dst.with_name(dst.name + '.key')
         st = p.stat(); key = fingerprint(p.name, st.st_size, st.st_mtime_ns)
         if not (dst.is_file() and reused(keyfile, key) is not None):
             PROG.set(done=i, step=p.name)
@@ -535,15 +588,14 @@ def vnum(ver):   # 'v655360' → 655360
 
 
 def nsp_versions(fam, builds):
-    """The versions the folder holds: {version: its update NSP, or None for v0 (the base game alone)}. An update is known by the [v<N>] tag in its file name; a single update without one
-    is taken for the newest update the profile registers (its build IDs are checked once extracted), and is left out when the profile registers none or other updates are there"""
+    """Package versions are CNMT integers. Keep builds for the caller API only;
+    an unreadable version must never be guessed from a filename or newest profile.
+    """
     out = {'v0': None}
-    for v, p in fam['updates']:
-        if v is not None: out[f'v{v}'] = p
-    loose = [p for v, p in fam['updates'] if v is None]
-    reg = sorted((b for b in builds if b != 'v0'), key=vnum)
-    if loose and len(fam['updates']) == 1 and reg: out[reg[-1]] = loose[0]
-    elif loose: say(f'[RED] leaving out update NSPs without a version tag ([v<N>]) in their name: {", ".join(p.name for p in loose)}')
+    for version, path in fam['updates']:
+        if type(version) is not int or not 0 <= version < 2**32:
+            raise BuildError('update has no verified internal package version; inspect its CNMT again')
+        out[f'v{version}'] = path
     return out
 
 
@@ -960,7 +1012,7 @@ def extract_aoc(nx, keys, repo, work, app, fam, logs):
         if tid not in best or k > best[tid][0]: best[tid] = (k, p)
     PROG.stage('extract DLC')
     kf = work / 'aoc.key'
-    key = fingerprint(sorted((tid, p.name, p.stat().st_size, p.stat().st_mtime_ns) for tid, (_, p) in best.items()), ('files', [repo / 'dm/tools/nx_extract' / f for f in ('Program.cs', 'nx_extract.csproj')]))
+    key = fingerprint(sorted((tid, p.name, p.stat().st_size, p.stat().st_mtime_ns) for tid, (_, p) in best.items()), ('files', [repo / 'dm/tools/nx_extract' / f for f in ('Program.cs', 'PackageMetadata.cs', 'nx_extract.csproj')]))
     if dst.is_dir() and (note := reused(kf, key)) is not None:
         PROG.end(f'{note}, reused (inputs unchanged)'); return dst
     rmtree(kf)
@@ -968,7 +1020,7 @@ def extract_aoc(nx, keys, repo, work, app, fam, logs):
         idx = tid - app - 0x1000
         PROG.set(step='extracting', done=i, total=len(best), unit='DLC')
         say(f'DLC index {idx}: {p.name}')
-        run([nx, keys, '--aoc', p, tmp / f'{idx}.img', '--romfs-image'], logs / f'aoc_{idx}.log')
+        run([nx, keys, '--aoc', p, tmp / f'{idx}.img', f'--title-id={tid:016X}', '--romfs-image'], logs / f'aoc_{idx}.log')
     swap_in(tmp, dst)
     kf.write_text(f'{key}\n{len(best)} DLC\n')
     PROG.end(f'{len(best)} DLC')
@@ -2175,11 +2227,17 @@ def main(args=None):
     configure_dotnet(env)
     env.setdefault('J', str(os.cpu_count() or 8))   # shader_split.py's and dmsh_build.py's workers (their default is 8)
     py = sys.executable
-    app, fam = scan_nsps(nsp_dir)
+    inspect = input_inspector(repo, nsp_dir, keys, env)
+    app, fam = scan_nsps(nsp_dir, inspect)
     if args.require_title_id:
         if not re.fullmatch(r'[0-9A-Fa-f]{16}', args.require_title_id) or app != int(args.require_title_id, 16):
             raise BuildError('input game does not match --require-title-id')
-    fam = decompress_nsz(nsp_dir, app, fam, keys, env)
+    converted = decompress_nsz(nsp_dir, app, fam, keys, env)
+    if converted is not fam:
+        paths = {converted['base'], *(p for _, p in converted['updates']), *(p for _, _, p in converted['dlc'])}
+        checked_app, converted = scan_nsps(nsp_dir, inspect, paths=paths)
+        if checked_app != app: raise BuildError('decompressed package metadata changed application identity')
+    fam = converted
     force =args.provisional or PROVISIONAL   # a provisional profile even when dm/games has one (testing the guesses)
     g, provisional, shadowed = None if force else gamemod.by_title(app), False, False
     alias = None if force or g else same_build(nsp_dir, app, fam, keys, repo, env)   # a known build under another title ID: packed from a profile derived from that build's

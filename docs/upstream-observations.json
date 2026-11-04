@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "automatic_code_integration": false,
+  "observations": [
+    {
+      "repo": "seedds/nxnative",
+      "ref": "main",
+      "reviewed_sha": "975bb4c14456d145eb3d969814534eecdd996ce9",
+      "observed_sha": "975bb4c14456d145eb3d969814534eecdd996ce9",
+      "license": "MIT",
+      "pull_candidates": [],
+      "status": "reviewed-reference"
+    },
+    {
+      "repo": "zenvyzenshiro/NXNativeWindows",
+      "ref": "main",
+      "reviewed_sha": "269d61ff974b2e8e073d7357466ae130c3f6812f",
+      "observed_sha": "269d61ff974b2e8e073d7357466ae130c3f6812f",
+      "license": "MIT",
+      "pull_candidates": [],
+      "status": "reviewed-reference"
+    },
+    {
+      "repo": "Jeb0978/nxnative-a16",
+      "ref": "main",
+      "reviewed_sha": "ae43b9950e19d13d66614c23992796ed288fc431",
+      "observed_sha": "ae43b9950e19d13d66614c23992796ed288fc431",
+      "license": "MIT",
+      "pull_candidates": [],
+      "status": "reviewed-reference"
+    },
+    {
+      "repo": "4ppp44/nxnative-ios17",
+      "ref": "main",
+      "reviewed_sha": "f5bf6a8e1090efa53ef92ecabed11e09b062c7c6",
+      "observed_sha": "f5bf6a8e1090efa53ef92ecabed11e09b062c7c6",
+      "license": "MIT",
+      "pull_candidates": [],
+      "status": "reviewed-reference"
+    },
+    {
+      "repo": "frs0n/macnativegames",
+      "ref": "main",
+      "reviewed_sha": "e58b2bd08ca54f82af1449bbfb812843f5e63de3",
+      "observed_sha": "e58b2bd08ca54f82af1449bbfb812843f5e63de3",
+      "license": "MIT",
+      "pull_candidates": [],
+      "status": "reviewed-reference"
+    },
+    {
+      "repo": "widmonstertony/nxnative",
+      "ref": "main",
+      "reviewed_sha": "93578abad6704ae95fbf60e80027469f145b02cf",
+      "observed_sha": "93578abad6704ae95fbf60e80027469f145b02cf",
+      "license": "MIT",
+      "pull_candidates": [],
+      "status": "reviewed-reference"
+    },
+    {
+      "repo": "widmonstertony/nxnative",
+      "ref": "fix/dirty-pool-retirement",
+      "reviewed_sha": "3d2c3805f71d5749da2c4686f530547041ec3f69",
+      "observed_sha": "3d2c3805f71d5749da2c4686f530547041ec3f69",
+      "license": "MIT",
+      "pull_candidates": [],
+      "status": "reviewed-reference"
+    }
+  ]
+}

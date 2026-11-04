@@ -1,6 +1,6 @@
 # Player-facing settings: the iOS launcher (dm/ios/Sources/Launcher.swift) and the Mac app's settings window (dm/mac/Launcher.swift) show them before the game starts; Mac front ends read the same list.
 # dm/games/settings.py writes one game's list into its app (dm/launcher.json; build_ipa.sh, and dm/mac/pack_app.py through the NSP script): the rows whose condition holds for that game, with its defaults. Each sets an environment variable the host reads when the game starts; one an env file sets
-# (Documents/env.txt, the bundle's dm/env.txt) is shown but kept. Diagnostic switches stay environment-only, so they are not listed here. The player's page is docs/settings.md.
+# (Documents/env.txt, the bundle's dm/env.txt) is shown but kept. Heavy diagnostics stay environment-only; the bounded performance trace is an explicit opt-in setting. The player's page is docs/settings.md.
 # Columns, separated by tabs:
 #   variable  the environment variable the setting sets
 #   kind      choice: values value=label,... (languages: the game's own, from its control data); range: values low:high:step, shown as a percentage;
@@ -32,7 +32,8 @@ DM_PSO_PREBUILD	toggle	-	0|1	gfxapi:nvn	Performance	Pipeline prebuild	Builds eve
 DM_NVN_ENC_THREAD	toggle	-	1|0	gfxapi:nvn	Performance	Encode thread
 DM_FPS_HOLD	toggle	on/off	DM_GAME_FPS_HOLD	DM_GAME_FPS_TARGET!=0	Performance	Hold frames when late
 DM_METAL_HUD	toggle	-	0	always	Performance	Performance HUD
-DM_BC_WORKERS	choice	1=1 worker,2=2 workers,4=4 workers	2	gfxapi:nvn	Performance	BC texture workers	Two limits competition with game threads on A16. More workers can increase heat and frame spikes.
+DM_STUTTER	toggle	-	0	gfxapi:nvn	Performance	Record performance trace	Writes bounded stutter.jsonl and capabilities.json in Documents. Restart after changing; measure recording overhead in A/B tests.
+DM_BC_WORKERS	choice	1=1 worker,2=2 workers,4=4 workers	2	gfxapi:nvn	Performance	BC texture workers	Conservative default: compare 1/2/4 on the same route. More workers can increase heat and frame spikes.
 DM_BC_CACHE	choice	on=On,off=Off	on	gfxapi:nvn	Performance	Persistent ASTC cache	Reuses verified texture conversions; up to 256 MB on disk and one 16 MB temporary write.
 DM_PSO_PREPARE_THREADS	choice	1=1 worker,2=2 workers,4=4 workers	2	gfxapi:nvn	Performance	Shader preparation workers	Applies before gameplay; the learned and bundled shader lists remain enabled.
 DM_OUTPUT_HEIGHT	choice	720=720p,900=900p,1080=1080p,0=Native display	720	platform:ios	Game	Display output	Lower output uses smaller presentation buffers. Internal render scale is a separate setting.	level=basic
