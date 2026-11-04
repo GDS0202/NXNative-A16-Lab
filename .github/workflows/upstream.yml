@@ -24,7 +24,7 @@ jobs:
           python-version: '3.14'
       - name: Observe public metadata only and run source-only checks
         run: |
-          python -m unittest dm/tools/tests/test_upstream_monitor.py
+          python -m unittest dm/tools/tests/test_upstream_monitor.py dm/tools/tests/test_upstream_workflow.py
           python scripts/upstream_monitor.py --out docs/upstream-observations.json
           python -m unittest dm/tools/tests/test_docs.py
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -40,8 +40,9 @@ jobs:
           fi
           branch="automation/upstream-observations"
           number=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')
-          old=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" --jq '.object.sha' 2>/dev/null || true)
+          if ! old=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" --jq '.object.sha' 2>/dev/null); then old=""; fi
           if [ -n "$old" ]; then
+            [[ "$old" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid observation branch hash; refusing overwrite.'; exit 1; }
             [ -n "$number" ] || { echo 'Reserved observation branch exists without an open bot PR; refusing overwrite.'; exit 1; }
             files=$(gh pr view "$number" --json files --jq '.files[].path')
             [ "$files" = docs/upstream-observations.json ] || { echo 'Observation branch contains manual source edits; refusing overwrite.'; exit 1; }
