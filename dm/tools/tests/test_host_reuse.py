@@ -1,10 +1,13 @@
 """Recover the actual gen_embed layout from synthetic arm64 Mach-O sections."""
 import importlib.util
+import json
+import os
 from pathlib import Path
 import struct
 import tempfile
 import unittest
 import zipfile
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
 spec = importlib.util.spec_from_file_location('rebuild_host', ROOT / 'scripts/rebuild_host.py')
@@ -94,6 +97,22 @@ class Reuse(unittest.TestCase):
         (app / 'dm/c1_full.tsv').write_text('# chain b-abcdef inputs aaaaaaaaaaaa wrong\n')
         with self.assertRaisesRegex(ValueError, 'never restamp'): r.verify_shader_snapshot(app, '01007EF00011E000', 'abcdef')
         self.assertEqual(stamp.read_bytes(), before)
+
+    def test_launcher_uses_build_api_and_keeps_actual_language_choices(self):
+        tables = self.root / 'dm'; tables.mkdir()
+        patched = self.root / 'patched'; patched.mkdir()
+        language = {'env': 'DM_LANG', 'default': 'it', 'choices': [{'value': 'it', 'label': 'Italian'}]}
+        (tables / 'launcher.json').write_text(json.dumps({'settings': [language]}))
+        target = self.root / 'launcher.json'
+        with patch.dict(os.environ, {'GFXAPI': 'gl', 'DM_SHOW_FPS': 'NO'}):
+            env = dict(os.environ, GFXAPI='nvn', SETTINGS_PLATFORM='ios', DM_SHOW_FPS='YES')
+            r.regenerate_launcher('01007EF00011E000', patched, tables, target, env)
+        rows = {row['env']: row for row in json.loads(target.read_text())['settings']}
+        self.assertIn('DM_STUTTER', rows)
+        self.assertIn('DM_BC_WORKERS', rows)
+        self.assertEqual(rows['DM_SHOW_FPS']['default'], '1')
+        self.assertEqual(rows['DM_LANG'], language)
+        self.assertEqual(target.read_bytes(), (tables / 'launcher.json').read_bytes())
 
 
 if __name__ == '__main__': unittest.main()

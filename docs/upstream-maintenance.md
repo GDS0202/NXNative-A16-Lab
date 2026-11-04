@@ -4,7 +4,7 @@ The daily GitHub Actions workflow (04:17 UTC) and its manual trigger inspect
 public repository metadata and up to 20 recently updated open PRs for each
 configured source. `docs/upstreams.json` records the exact reviewed reference
 points. Observation state is separate from integrated code. A changed head or
-candidate creates a **draft observation PR**, with no imported code and no
+candidate prepares a **draft observation PR**, with no imported code and no
 auto-merge. Unavailable/deleted branches retain their last known state.
 
 The monitor runs only from this repository's trusted default-branch schedule
@@ -30,6 +30,8 @@ For each actual integration:
    device acceptance is pending. Stable requires repeated device results.
 
 GitHub must allow Actions to create pull requests for automatic draft PR
-creation. The observation artifact and checks remain useful if repository
-policy blocks that write; inspect the failed step and enable the repository
-setting deliberately. No workflow requests a long-lived personal token.
+creation. If repository policy blocks that write, the workflow preserves its
+observation branch and artifact and explicitly reports that no PR was created.
+An owner can open the draft from that branch without expanding Actions
+permissions. Repository approval settings are never changed automatically.
+No workflow requests a long-lived personal token.

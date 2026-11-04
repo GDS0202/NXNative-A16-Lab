@@ -63,7 +63,11 @@ jobs:
           Validation: monitor fixtures and documentation checks passed in the observation workflow.
           EOF
           if [ -z "$number" ]; then
-            gh pr create --draft --head "$branch" --base main --title 'Review new public upstream observations' --body-file "$RUNNER_TEMP/pr-body.md"
+            if ! gh pr create --draft --head "$branch" --base main --title 'Review new public upstream observations' --body-file "$RUNNER_TEMP/pr-body.md"; then
+              echo '::warning::Draft PR creation failed. The observation branch and artifact are preserved; an owner can open the draft without changing repository permissions.'
+              echo "Observation branch: https://github.com/$GITHUB_REPOSITORY/tree/$branch" >> "$GITHUB_STEP_SUMMARY"
+              echo 'Draft PR was not created; inspect the preceding API error. No source code was integrated.' >> "$GITHUB_STEP_SUMMARY"
+            fi
           else
             gh pr view "$number" --json url --jq '.url' >> "$GITHUB_STEP_SUMMARY"
           fi

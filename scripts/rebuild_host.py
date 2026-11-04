@@ -164,6 +164,17 @@ def verify_shader_snapshot(app, game, chain):
     return stamp['inputs']
 
 
+def regenerate_launcher(game, patched, tables, destination, env):
+    """Use the build environment, not the driver's inherited host/API defaults."""
+    old = json.loads((tables / 'launcher.json').read_text())
+    subprocess.run([sys.executable, str(REPO / 'dm/games/settings.py'), game, str(patched),
+                    str(patched / 'no-control.nacp'), str(destination)], env=env, check=True)
+    launcher = json.loads(destination.read_text())
+    launcher['settings'].extend(row for row in old['settings'] if row['env'] == 'DM_LANG')
+    text = json.dumps(launcher, indent=2) + '\n'
+    destination.write_text(text); (tables / 'launcher.json').write_text(text)
+
+
 def build(args):
     if sys.platform != 'darwin': raise ValueError('host compilation runs on the private Mac runner, not on the Mac client')
     sys.path.insert(0, str(REPO / 'scripts')); import cloud_ipa
@@ -225,13 +236,7 @@ def build(args):
     (gen / 'dm.xcconfig').write_text(config + '\nOTHER_LDFLAGS = $(inherited) $(DM_FRAMEWORKS) ' + flags + '\n')
     # Keep game-language choices from its actual NACP; regenerate all other rows
     # from the current source, including the opt-in trace setting.
-    import settings
-    old_launcher = json.loads((tables / 'launcher.json').read_text())
-    launcher = settings.build(game, patched, args.work / 'no-control.nacp')
-    languages = [row for row in old_launcher['settings'] if row['env'] == 'DM_LANG']
-    launcher['settings'].extend(languages)
-    (tables / 'launcher.json').write_text(json.dumps(launcher, indent=2) + '\n')
-    (gen / 'dm/launcher.json').write_text(json.dumps(launcher, indent=2) + '\n')
+    regenerate_launcher(game, patched, tables, gen / 'dm/launcher.json', env)
     run('xcodegen', 'generate')
     derived = args.work / 'derived'
     with (args.work / 'host-build.log').open('w') as log:
