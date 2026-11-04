@@ -113,7 +113,7 @@ static class P {
         byte[] magic = new byte[4]; storage.Read(0x100, magic).ThrowIfFailure();
         if (System.Text.Encoding.ASCII.GetString(magic) == "HEAD") {
             var xci = new Xci(ks, storage);
-            if (!xci.HasPartition(XciPartitionType.Secure)) throw new InvalidDataException("XCI has no secure partition");
+            if (!xci.HasPartition(XciPartitionType.Secure)) throw new PackageMetadataException("XCI has no secure partition");
             pfs = xci.OpenPartition(XciPartitionType.Secure);
         } else {
             var partition = new PartitionFileSystem(); partition.Initialize(storage).ThrowIfFailure(); pfs = partition;
@@ -123,7 +123,7 @@ static class P {
             using var f = new UniqueRef<IFile>();
             pfs.OpenFile(ref f.Ref, e.FullPath.ToU8Span(), OpenMode.Read).ThrowIfFailure();
             byte[] ticket = new byte[0x2c0]; f.Get.Read(out long read, 0, ticket, ReadOption.None).ThrowIfFailure();
-            if (read != ticket.Length || ticket[0x281] != 0) throw new InvalidDataException("a common ticket is required (personalized tickets are unsupported)");
+            if (read != ticket.Length || ticket[0x281] != 0) throw new PackageMetadataException("a common ticket is required (personalized tickets are unsupported)");
             ks.ExternalKeySet.Add(new RightsId(ticket.AsSpan(0x2a0, 0x10)), new AccessKey(ticket.AsSpan(0x180, 0x10))).ThrowIfFailure();
         }
         var result = new List<PackageNca>(); var ids = new HashSet<string>(StringComparer.Ordinal);
@@ -132,7 +132,7 @@ static class P {
             if (!compressed && !e.Name.EndsWith(".nca", StringComparison.OrdinalIgnoreCase)) continue;
             string id = e.Name.Split('.')[0].ToLowerInvariant();
             if (id.Length != 32 || !Array.TrueForAll(id.ToCharArray(), Uri.IsHexDigit) || !ids.Add(id))
-                throw new InvalidDataException("NCA content IDs are invalid or duplicated");
+                throw new PackageMetadataException("NCA content IDs are invalid or duplicated");
             using var f = new UniqueRef<IFile>();
             pfs.OpenFile(ref f.Ref, e.FullPath.ToU8Span(), OpenMode.Read).ThrowIfFailure();
             var nca = new Nca(ks, f.Release().AsStorage());
@@ -144,46 +144,53 @@ static class P {
         var records = new List<PackageRecord>(); var seen = new HashSet<string>();
         foreach (var item in files) {
             if (item.Nca.Header.ContentType != NcaContentType.Meta) continue;
-            if (item.Compressed) throw new InvalidDataException("compressed meta NCA is unsupported; decompress the package first");
+            if (item.Compressed) throw new PackageMetadataException("compressed meta NCA is unsupported; decompress the package first");
             using IFileSystem fs = item.Nca.OpenFileSystem(NcaSectionType.Data, IntegrityCheckLevel.ErrorOnInvalid);
             foreach (var entry in fs.EnumerateEntries("*.cnmt", SearchOptions.Default)) {
-                if (entry.Size < 0x40 || entry.Size > PackageMetadata.MaxBytes) throw new InvalidDataException("invalid CNMT length");
+                if (entry.Size < 0x40 || entry.Size > PackageMetadata.MaxBytes) throw new PackageMetadataException("invalid CNMT length");
                 using var file = new UniqueRef<IFile>();
                 fs.OpenFile(ref file.Ref, entry.FullPath.ToU8Span(), OpenMode.Read).ThrowIfFailure();
                 byte[] bytes = new byte[entry.Size];
                 file.Get.Read(out long read, 0, bytes, ReadOption.None).ThrowIfFailure();
-                if (read != bytes.Length) throw new InvalidDataException("truncated CNMT");
+                if (read != bytes.Length) throw new PackageMetadataException("truncated CNMT");
                 var record = PackageMetadata.Parse(bytes);
-                if (!seen.Add(record.TitleId + ":" + record.Version)) throw new InvalidDataException("duplicate content meta");
+                if (!seen.Add(record.TitleId + ":" + record.Version)) throw new PackageMetadataException("duplicate content meta");
                 bool primary = false;
                 foreach (var content in record.Contents) {
                     var actual = files.Find(n => n.Id == content.Id);
                     // Delta fragments are optional for a full patch installation.
                     if (actual == null && content.Type == 6) continue;
                     if (actual == null || (!actual.Compressed && (ulong)actual.Size != content.Size))
-                        throw new InvalidDataException("CNMT references a missing or truncated NCA");
+                        throw new PackageMetadataException("CNMT references a missing or truncated NCA");
                     if (content.Type == 1) {
                         ulong expected = Convert.ToUInt64(record.ApplicationId, 16) + content.IdOffset;
                         if (actual.Nca.Header.ContentType != NcaContentType.Program || actual.Nca.Header.TitleId != expected)
-                            throw new InvalidDataException("Program NCA does not match its content meta association");
+                            throw new PackageMetadataException("Program NCA does not match its content meta association");
                         primary |= content.IdOffset == 0;
                     }
                 }
-                if (record.Type != "AddOnContent" && !primary) throw new InvalidDataException("content meta has no primary Program NCA (delta-only or incomplete package)");
+                if (record.Type != "AddOnContent" && !primary) throw new PackageMetadataException("content meta has no primary Program NCA (delta-only or incomplete package)");
                 records.Add(record);
             }
         }
-        if (records.Count == 0) throw new InvalidDataException("no readable content meta NCA; filenames and ticket names cannot establish package identity");
+        if (records.Count == 0) throw new PackageMetadataException("no readable content meta NCA; filenames and ticket names cannot establish package identity");
         return records;
     }
     static int InspectCommand(string[] args) {
         try {
-            KeySet keys = ExternalKeyReader.ReadKeyFile(args[0]);
-            var records = ReadMetadata(OpenPackage(keys, args[2]));
+            List<PackageRecord> records;
+            TextWriter stdout = Console.Out, stderr = Console.Error;
+            try {
+                // Suppress library key-parser diagnostics as well as exception
+                // stacks. Only our constant, key-safe messages leave this helper.
+                Console.SetOut(TextWriter.Null); Console.SetError(TextWriter.Null);
+                KeySet keys = ExternalKeyReader.ReadKeyFile(args[0]);
+                records = ReadMetadata(OpenPackage(keys, args[2]));
+            } finally { Console.SetOut(stdout); Console.SetError(stderr); }
             Console.WriteLine(JsonSerializer.Serialize(new { schema = 1, verification = "metadata-only", records },
                 new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower }));
             return 0;
-        } catch (InvalidDataException e) { Console.Error.WriteLine("[RED] package metadata: " + e.Message); return 3; }
+        } catch (PackageMetadataException e) { Console.Error.WriteLine("[RED] package metadata: " + e.Message); return 3; }
         catch (Exception) {
             // Never forward a crypto exception, key values, absolute paths or a
             // stack trace to a shareable diagnostic. Extraction checks data later.
@@ -195,11 +202,11 @@ static class P {
         var files = OpenPackage(keys, path); var records = ReadMetadata(files);
         string kind = (only ?? ContentMetaType.Application).ToString();
         var matches = records.FindAll(r => r.Type == kind && (titleId == null || r.TitleId.Equals(titleId, StringComparison.OrdinalIgnoreCase)));
-        if (matches.Count != 1) throw new InvalidDataException("package has no unique " + kind + " content meta; select one application per input folder");
+        if (matches.Count != 1) throw new PackageMetadataException("package has no unique " + kind + " content meta; select one application per input folder");
         var selected = new HashSet<string>(); foreach (var c in matches[0].Contents) selected.Add(c.Id);
         var result = new List<Nca>();
         foreach (var file in files) if (selected.Contains(file.Id)) {
-            if (file.Compressed) throw new InvalidDataException("decompress NSZ/XCZ before extraction");
+            if (file.Compressed) throw new PackageMetadataException("decompress NSZ/XCZ before extraction");
             result.Add(file.Nca);
         }
         return result;

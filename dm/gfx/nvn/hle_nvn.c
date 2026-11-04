@@ -18,6 +18,8 @@
 #include "nvn_timestamp.h"
 #include "../../host/front.h"
 #include "nvn_dirty.h"
+#include "nvn_stutter.h"
+#include "../tex/bc_cache.h"
 #include <mach/mach_time.h>
 #include <CommonCrypto/CommonDigest.h>
 #include <CoreFoundation/CoreFoundation.h>
@@ -1390,7 +1392,7 @@ __attribute__((weak)) int dm_thermal_now(void) { return -1; }   // Default (Mac)
 __attribute__((weak)) int dm_low_power_now(void) { return 0; }   // Low Power Mode (iOS front_ios.m); off on the Mac
 // Per-frame ring for the long-frame log (GPU time only arrives 8 frames late, so store first and judge later)
 #define LFN 16
-typedef struct { uint64_t f; double fr, nv, t_s, make_ms, up_mb, up_ms; unsigned pso, lib, up, rup, hy; } lf_rec;   // hy: draws with a hybrid (pulling) pipeline
+typedef struct { uint64_t f; double fr, nv, t_s, make_ms, up_mb, up_ms; unsigned pso, lib, up, rup, hy; nvn_stutter_sample trace; } lf_rec;   // hy: draws with a hybrid (pulling) pipeline
 static lf_rec g_lf[LFN];
 __attribute__((weak)) void dm_longframe_note(const char *what) { LOG("[longframe] %s", what); }   // Default (graphics unit tests); the strong definition in the host's diag.c adds scene context and writes perf.txt
 extern void mtl_create_ns(uint64_t *lib_ns, uint64_t *pso_ns); extern void mtl_hybrid_stats(uint64_t *draws, uint64_t *made, uint64_t *none); extern uint64_t mtl_upload_bytes(void); extern void mtl_pkg_stats(uint64_t *uploads, uint64_t *reuploads);
@@ -1501,7 +1503,7 @@ static void tsummary(uint64_t frame) {
 static struct { uint64_t f; int n; const char *k[64]; double v[64]; } g_sr[SRN];
 static int g_slow = -1;
 static int slow_on(void) { if (g_slow < 0) g_slow = getenv("DM_SLOWFRAME") != NULL; return g_slow; }
-static int frame_rec(void) { return g_tsv || slow_on(); }
+static int frame_rec(void) { return g_tsv || slow_on() || nvn_stutter_enabled(); }
 static void trow(uint64_t f, const char *name, double v) {
     if (g_tsv) fprintf(g_tsv, "%llu\t%s\t%.3f\n", f, name, v);
     if (slow_on()) { __typeof__(g_sr[0]) *r = &g_sr[f % SRN]; if (r->f != f) { r->f = f; r->n = 0; } if (r->n < 64) { r->k[r->n] = name; r->v[r->n++] = v; } }
@@ -1832,17 +1834,19 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     }
     if (prev_in) {
         double fr = (t0 - prev_in) / 1e6, wk = (t0 - prev_out) / 1e6, nv = atomic_exchange(&g_nvn_ns, 0) / 1e6;
+        nvn_stutter_sample trace = {.frame = f, .timestamp_ns = t0, .frame_ms = fr, .work_ms = wk, .nvn_ms = nv,
+            .gpu_ms = -1, .process_cpu_ms = -1, .expected_ms = MAX(MAX(present_itv(o), g_hold_ring[(o->presents - 1) % 16]) * 1000.0 / 60, 1000.0 / mtl_fps_target())};
         tpush(0, fr); tpush(1, wk); tpush(2, nv);
-        trow(f, "@frame_ms", fr); trow(f, "@work_ms", wk); trow(f, "@nvn_ms", nv); trow(f, "@sync_ms", atomic_exchange(&g_sync_ns, 0) / 1e6); trow(f, "@itv", (double)present_itv(o));
+        trow(f, "@frame_ms", fr); trow(f, "@work_ms", wk); trow(f, "@nvn_ms", nv); trow(f, "@sync_ms", trace.sync_ms = atomic_exchange(&g_sync_ns, 0) / 1e6); trow(f, "@itv", (double)present_itv(o));
         // Slow-frame attribution (taken only when DM_NVN_TSV is on): this frame's present-thread CPU time (−1 if the thread changed), CPU of all threads in the process, acquire wait accumulated per frame, present call time (same base as the GPU / on-screen present times: ms since process start)
-        trow(f, "@wait_ms", g_acq_wait_ns / 1e6); trow(f, "@pq_wait_ms", g_pq_wait_ns / 1e6);
+        trow(f, "@wait_ms", trace.acquire_ms = g_acq_wait_ns / 1e6); trow(f, "@pq_wait_ms", trace.present_wait_ms = g_pq_wait_ns / 1e6);
         if (frame_rec()) {
             static pthread_t pth; static uint64_t pcpu, pproc;
             uint64_t c = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID); pthread_t th = pthread_self();
             trow(f, "@cpu_ms", pcpu && pthread_equal(th, pth) ? (c - pcpu) / 1e6 : -1); pth = th; pcpu = c;
             struct rusage ru; getrusage(RUSAGE_SELF, &ru);
             uint64_t pc = (uint64_t)(ru.ru_utime.tv_sec + ru.ru_stime.tv_sec) * 1000000000ull + (uint64_t)(ru.ru_utime.tv_usec + ru.ru_stime.tv_usec) * 1000ull;
-            if (pproc) trow(f, "@proc_cpu_ms", (pc - pproc) / 1e6); pproc = pc;
+            if (pproc) trow(f, "@proc_cpu_ms", trace.process_cpu_ms = (pc - pproc) / 1e6); pproc = pc;
             trow(f, "@call_ms", (t0 - g_t0_ns) / 1e6);
         }
         trow(f, "@passes", (double)(ps - prev_pass)); trow(f, "@draws", (double)(dr - prev_draw));
@@ -1859,8 +1863,8 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
         trow(f, "@faults", (double)(fa_ - pfa)); trow(f, "@reuploads", (double)(re_ - pre_)); pfa = fa_; pre_ = re_;
         static uint64_t pmc, pmp, pmn; uint64_t mc_, mpg_, mn_; nvn_dirty_mp_stats(&mc_, &mpg_, &mn_);
         trow(f, "@mprotect_calls", (double)(mc_ - pmc)); trow(f, "@mprotect_pages", (double)(mpg_ - pmp)); trow(f, "@mprotect_ms", (mn_ - pmn) / 1e6); pmc = mc_; pmp = mpg_; pmn = mn_;
-        double up_ms = mtl_upload_ns_take() / 1e6; trow(f, "@upload_ms", up_ms);
-        trow(f, "@upload_gpu_ms", mtl_upload_gpu_ns_take() / 1e6);
+        double up_ms = mtl_upload_ns_take() / 1e6; trow(f, "@upload_ms", trace.upload_ms = up_ms);
+        trow(f, "@upload_gpu_ms", trace.upload_gpu_ms = mtl_upload_gpu_ns_take() / 1e6);
         // Accounting: number of synchronous creations on the submit thread this frame + a timestamp on the same clock as UIMSG (offline, frames are split into front end / loading / in-run by the loading screen intervals)
         static uint64_t plib, ppso; uint64_t lib_, pso_; mtl_create_stats(&lib_, &pso_);
         trow(f, "@lib_new", (double)(lib_ - plib)); trow(f, "@pso_new", (double)(pso_ - ppso));
@@ -1868,14 +1872,27 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
             static uint64_t plns, ppns, pup, prup, pub, phy; uint64_t lns, pns, up, rup, ub, hy, hm_, hn_; mtl_create_ns(&lns, &pns); mtl_pkg_stats(&up, &rup); ub = mtl_upload_bytes(); mtl_hybrid_stats(&hy, &hm_, &hn_);
             lf_rec *r = &g_lf[f % LFN]; r->f = f; r->fr = fr; r->nv = nv; r->t_s = (now_ns() - g_t0_ns) / 1e9; r->pso = (unsigned)(pso_ - ppso); r->lib = (unsigned)(lib_ - plib);
             r->make_ms = ((lns - plns) + (pns - ppns)) / 1e6; r->up = (unsigned)(up - pup); r->rup = (unsigned)(rup - prup); r->up_mb = (ub - pub) / 1048576.0; r->up_ms = up_ms;
+            trace.compile_ms = r->make_ms; trace.pso_new = r->pso; trace.library_new = r->lib; trace.upload_bytes = ub - pub;
             r->hy = (unsigned)(hy - phy); plns = lns; ppns = pns; pup = up; prup = rup; pub = ub; phy = hy;
         }
         plib = lib_; ppso = pso_;
         trow(f, "@t_s", (now_ns() - g_t0_ns) / 1e9);
-        trow(f, "@drawable_ms", mtl_drawable_ns_take() / 1e6);
-        trow(f, "@sub_wall_ms", atomic_exchange(&g_sub_wall_ns, 0) / 1e6); trow(f, "@sub_cpu_ms", atomic_exchange(&g_sub_cpu_ns, 0) / 1e6); trow(f, "@sub_instr", (double)atomic_exchange(&g_sub_instr, 0));
+        trow(f, "@drawable_ms", trace.drawable_ms = mtl_drawable_ns_take() / 1e6);
+        trow(f, "@sub_wall_ms", trace.sub_wall_ms = atomic_exchange(&g_sub_wall_ns, 0) / 1e6); trow(f, "@sub_cpu_ms", trace.sub_cpu_ms = atomic_exchange(&g_sub_cpu_ns, 0) / 1e6); trow(f, "@sub_instr", (double)atomic_exchange(&g_sub_instr, 0));
+        if (nvn_stutter_enabled()) {
+            static nvn_bc_cache_info previous; nvn_bc_cache_info bc = nvn_bc_cache_stats();
+            trace.bc_decode_ms = (bc.decode_ns - previous.decode_ns) / 1e6;
+            trace.bc_cache_ms = (bc.cache_ns - previous.cache_ns) / 1e6;
+            trace.bc_calls = bc.decode_calls - previous.decode_calls;
+            trace.cache_hits = bc.hits - previous.hits; trace.cache_misses = bc.misses - previous.misses;
+            previous = bc; g_lf[f % LFN].trace = trace;
+        }
     } else atomic_store(&g_nvn_ns, 0);
     g_acq_wait_ns = g_pq_wait_ns = 0;
+    if (f >= 8 && nvn_stutter_enabled()) {
+        lf_rec *r = &g_lf[(f - 8) % LFN];
+        if (r->f == f - 8 && r->trace.frame == f - 8) { r->trace.gpu_ms = mtl_gpu_ms(f - 8); nvn_stutter_frame(&r->trace); }
+    }
     if (f >= 8) { double g = mtl_gpu_ms(f - 8); if (g >= 0) { tpush(3, g); trow(f - 8, "@gpu_ms", g); g_hr[g_hn++ % HRN] = g; }   // GPU time is taken 8 frames late (already completed)
         { lf_rec *r = &g_lf[(f - 8) % LFN]; if (g >= 0 && r->f == f - 8) mtl_ab_gpu(f - 8, g, r->fr); }   // DM_AB phases
         { lf_rec *r = &g_lf[(f - 8) % LFN];   // long-frame log (on by default, DM_LONGFRAME=0 turns it off): a line is printed only when the whole frame > 20 ms or GPU > 16.7 ms, and it is clearly above recent conditions

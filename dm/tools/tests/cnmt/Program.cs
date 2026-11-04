@@ -19,7 +19,7 @@ static class Tests {
     static void Seal(byte[] v) { SHA256.HashData(v.AsSpan(0, v.Length - 32)).CopyTo(v.AsSpan(v.Length - 32)); }
     static void Bad(byte[] v) {
         try { PackageMetadata.Parse(v); throw new Exception("invalid CNMT accepted"); }
-        catch (InvalidDataException) { }
+        catch (PackageMetadataException) { }
     }
     static void Main() {
         foreach (byte kind in new byte[] {0x80, 0x81, 0x82}) {

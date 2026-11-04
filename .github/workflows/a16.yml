@@ -38,6 +38,12 @@ jobs:
           name: bc-component-benchmark
           path: bc-benchmark.json
           retention-days: 7
+      - name: Bounded asynchronous trace under ASan and UBSan
+        run: |
+          clang -O2 -g -pthread -fsanitize=address,undefined -DNVN_STUTTER_LIMIT=8192 dm/gfx/tests/t_stutter.c dm/gfx/nvn/nvn_stutter.c -o /tmp/stutter
+          /tmp/stutter
+          /tmp/stutter on
+          python -m unittest dm/tools/tests/test_stutter_analyze.py
       - name: Presentation statistics under ASan and UBSan
         run: |
           clang -O2 -g -pthread -fsanitize=address,undefined dm/gfx/tests/t_frame_metrics.c dm/gfx/nvn/nvn_frame_metrics.c -o /tmp/frame-metrics
@@ -78,3 +84,8 @@ jobs:
         run: |
           clang -O1 -g -pthread -fsanitize=thread dm/gfx/tests/t_frame_metrics.c dm/gfx/nvn/nvn_frame_metrics.c -o /tmp/frame-metrics
           /tmp/frame-metrics
+      - name: Bounded asynchronous trace under ThreadSanitizer
+        run: |
+          clang -O1 -g -pthread -fsanitize=thread -DNVN_STUTTER_LIMIT=8192 dm/gfx/tests/t_stutter.c dm/gfx/nvn/nvn_stutter.c -o /tmp/stutter
+          /tmp/stutter
+          /tmp/stutter on

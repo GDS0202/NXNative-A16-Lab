@@ -479,3 +479,11 @@ Games read this count as a position in their own command memory and size their h
 ### `nvnPrivate0`, an inlined command-buffer fast path flag
 
 - `nvnPrivate0`, a new SDK 20 import, needs nothing: it is a flag in `sdk`'s bss that enables an inlined command-buffer fast path when the NVN driver sets it (it stays 0). Found on [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md) (1.9.0, SDK 20.5.22).
+
+### A retired pool remains read-only
+
+- **Symptom:** a system call writing into storage after its NVN pool was finalized can fail with `EFAULT`; a direct write can fault after the tracker stopped owning the page.
+- **Cause:** `nvn_dirty_protect` looked up a live descriptor without holding the slot mutex. Retirement could restore writable pages and mark the descriptor dead before protect changed them to BUSY, then protect made the retired storage read-only.
+- **Fix:** serialize the descriptor lifetime across protection with the same mutex used by pool creation and retirement. The signal-handler and pre-write paths remain lock-free. Adapted from the MIT-licensed `widmonstertony/nxnative` fix `3d2c3805f71d5749da2c4686f530547041ec3f69`; author and original notices are retained.
+- **Found on:** static review of the common dirty tracker used by [Breath of the Wild](../../dm/games/01007EF00011E000/README.md) and other NVN games. This does not establish the cause of any reported iPad hitch or artifact.
+- **Check:** `t_dirty_retire_race` starts retirement between lookup and protection, then checks that `read()` can write into the retired storage. The existing page-state and shared-slot tests remain part of CI.
