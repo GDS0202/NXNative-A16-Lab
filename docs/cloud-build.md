@@ -54,7 +54,7 @@ Sign/install the IPA with your sideloading tool. In Files, copy `romfs.img`
 directly into **On My iPad / BOTW A16 Lab**. That visible app folder is its
 Documents root; do not create another Documents folder inside it. Close and
 reopen the app. Open the
-launcher, verify handheld mode and 100% internal render scale (1280x720), and
+launcher, verify handheld mode and 100% internal render scale (nominally 1280x720), and
 start the [device acceptance route](a16.md#device-acceptance-route).
 
 This static native path does not need JIT. The signing tool's entitlement

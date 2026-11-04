@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 
 BASE = {
-    'DM_RENDER_SCALE': '1.0', 'DM_DYNAMIC_RESOLUTION': '0', 'DM_OPMODE': '0', 'DM_OUTPUT_HEIGHT': '720',
+    'DM_RENDER_SCALE': '1.0', 'DM_OPMODE': '0', 'DM_OUTPUT_HEIGHT': '720',
     'DM_FPS_TARGET': '60', 'DM_PRESENT_UPSCALE': 'off', 'DM_PRESENT_SNAP': '1',
     'DM_PSO_MTL4': '1', 'DM_PSO_PREBUILD': '0', 'DM_NVN_ENC_THREAD': '1', 'DM_FPS_HOLD': 'on',
     'DM_BC_WORKERS': '2', 'DM_BC_CACHE': 'on', 'DM_PSO_PREPARE_THREADS': '2',
@@ -38,7 +38,8 @@ def main():
         path = args.out / f'{name}.txt'
         with path.open('x') as out:
             out.write('# Copy ONE profile as Documents/env.txt while the app is stopped.\n')
-            out.write('# Restart between trials; fixed 720p. See docs/performance.md for cache/route controls.\n')
+            out.write('# Restart between trials; nominal handheld 720p. BOTW retains its own dynamic resolution at scale 1.0.\n')
+            out.write('# DM_DYNAMIC_RESOLUTION is not a BOTW control. See docs/performance.md for measurement limits.\n')
             out.writelines(f'{key}={value}\n' for key, value in profiles()[name].items())
     print('Profiles written. These are experiments, not measured device recommendations.')
 

@@ -9,8 +9,9 @@ artifacts and intermittent stalls, without a trace or a measured baseline.
 
 1. In the new launcher's Performance section enable **Record performance
    trace**. The setting takes effect on the next game launch. Leave internal
-   render scale at 100%, Handheld (1280x720), dynamic resolution off, output
-   height 720 and Standard presentation. The HUD is optional.
+   render scale at 100%, Handheld (nominally 1280x720), output height 720
+   and Standard presentation. The HUD is optional. Read the resolution
+   caveat below before treating a comparison as identical internal work.
 2. Load the same save. Record 60 seconds standing still, 60 seconds moving and
    rotating the camera, inventory/map, fast travel, a new area, then at least
    ten minutes of play. Note when the gameplay route starts relative to launch.
@@ -88,7 +89,7 @@ Generate only the variants needed for the current hypothesis:
 python3 scripts/benchmark_plan.py --out a16-trials --variant baseline --variant bc-1 --variant bc-4
 ```
 
-Each profile changes one variable from the fixed 720p baseline. Other available
+Each profile changes one variable from the nominal handheld 720p baseline. Other available
 variants cover preparation workers 1/2/4, learned budget 512/1024/2048, cache,
 frame buffering, classic/Metal 4 **pipeline states**, full prebuild, late-frame
 holds, Standard/MetalFX, 30 fps and recording overhead. `classic-pso` does not
@@ -100,6 +101,22 @@ source/game build, save, scene, controller, power state, brightness and display
 rate constant. Use A-B-B-A order, at least three repeated comparisons and
 cool-downs to the same thermal state. Compare cold boot and warm boot separately.
 Do not run the entire matrix before the first baseline identifies useful trials.
+
+### Resolution semantics
+
+BOTW 1.9.0's existing render stub treats scale **1.0 as the game's own dynamic
+resolution**, not as a forced full-resolution scale. The independent 720p output
+height does not prove that every scene buffer rendered at 1280x720.
+`DM_DYNAMIC_RESOLUTION=0` is implemented for the verified NieR controller in
+`dm/host/hle_fpslock.c`; it does not disable BOTW's controller. The BOTW
+experiment generator therefore no longer writes that ineffective setting.
+
+The capability report records configured values, not measured internal scene
+dimensions. Keep scene/settings identical, but do not certify equal-resolution
+GPU work or a true 720p floor from those values alone. A strict BOTW full-scale
+lock needs a verified guest-stub change and actual scene-size evidence. It is
+not included in the host-only experiment; forcing full scale may increase GPU
+and memory cost where the original game would lower its resolution.
 
 For BC cold/warm tests use a fresh cache directory through `DM_BC_CACHE=bench-cache/trial-name`
 for the first launch, then the **same directory** for its warm repeat. Never mix

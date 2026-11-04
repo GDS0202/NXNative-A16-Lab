@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Correct benchmark resolution claims: BOTW scale 1.0 preserves the game's
+  dynamic resolution. Remove the NieR-only dynamic toggle from BOTW profiles;
+  a nominal 720p output is not proof of a fixed internal 720p scene.
+
 ## 0.2.0 — Experimental (2026-11-04)
 
 - Classify internal Application/Patch/AddOnContent metadata, versions and
