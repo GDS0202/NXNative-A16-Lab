@@ -194,5 +194,3 @@ def yaz0_stored(data, alignment):
     for i in range(0, len(data), 8):
         out += b'\xff' + data[i:i+8]
     return bytes(out)
-
-
