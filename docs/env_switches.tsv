@@ -21,6 +21,7 @@ DM_BC_SOFT	diagnostic	Force BC software conversion (1) or native BC (0); default
 DM_BC_WORKERS	player	1..4 conversion participants, default 2; small mip levels remain serial.
 DM_BOOTPROF	diagnostic	When set, logs boot timing: the loader's breakdown (mapping, relocation, probes), Metal library loading, pipeline creation, texture uploads and the first present
 DM_BUNDLE_ID	switch	Overrides the iOS app's bundle ID in `build_ipa.sh` (default `org.nxnative.<title ID in lowercase>`)
+DM_CNMT_DIGEST_ALLOWLIST	switch	Optional comma-separated complete CNMT SHA-256 pins for trusted repacked inputs with a stale internal digest. Only exact pinned bytes qualify; bounds, NCA integrity, associations and strict build IDs remain checked. Empty by default.
 DM_CONTROLLER_ICONS	player	auto (default), original, xbox or playstation selects generated BOTW 1.9.0 in-game button prompts at next launch; unsupported controllers or missing assets keep original prompts.
 DM_CONTROLLER_MODS_ROOT	path	Read-only generated controller overlay selected by the iOS front end; explicit RomFS mods take priority and saves are never redirected.
 DM_COPY_GAME_RESOURCES	switch	`NO` skips the Xcode build phase that copies the game's resources into the app (`stage_resources.sh`, on by default); `build_ipa.sh` sets it for its unsigned build, which packs them itself

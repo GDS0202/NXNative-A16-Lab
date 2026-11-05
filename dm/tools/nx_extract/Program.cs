@@ -150,6 +150,7 @@ static class P {
     }
     static List<PackageRecord> ReadMetadata(List<PackageNca> files) {
         var records = new List<PackageRecord>(); var seen = new HashSet<string>();
+        var pinned = PackageMetadata.DigestAllowlist(Environment.GetEnvironmentVariable("DM_CNMT_DIGEST_ALLOWLIST"));
         foreach (var item in files) {
             if (item.Nca.Header.ContentType != NcaContentType.Meta) continue;
             if (item.Compressed) throw new PackageMetadataException("compressed meta NCA is unsupported; decompress the package first");
@@ -161,7 +162,7 @@ static class P {
                 byte[] bytes = new byte[entry.Size];
                 file.Get.Read(out long read, 0, bytes, ReadOption.None).ThrowIfFailure();
                 if (read != bytes.Length) throw new PackageMetadataException("truncated CNMT");
-                var record = PackageMetadata.Parse(bytes);
+                var record = PackageMetadata.Parse(bytes, pinned);
                 if (!seen.Add(record.TitleId + ":" + record.Version)) throw new PackageMetadataException("duplicate content meta");
                 bool primary = false;
                 foreach (var content in record.Contents) {

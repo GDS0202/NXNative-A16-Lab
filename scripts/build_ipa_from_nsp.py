@@ -450,6 +450,8 @@ def inspect_package(nx, keys, path, env):
         if data.get('schema') != 1 or data.get('verification') != 'metadata-only': raise ValueError('schema')
         records = data['records']
         if not isinstance(records, list) or not 1 <= len(records) <= 1024: raise ValueError('records')
+        if any(isinstance(r, dict) and r.get('cnmt_digest_verified') is False for r in records):
+            say('repacked CNMT accepted by its explicitly pinned SHA-256; NCA integrity and title/version/build checks remain enabled')
         return records
     except (ValueError, KeyError, TypeError) as e:
         raise BuildError('invalid package metadata response; rebuild nx_extract') from e
@@ -2223,6 +2225,9 @@ def main(args=None):
     want_lang = language_code(lang_in) if lang_in else 'en-US'
     if not want_lang: raise BuildError(f'unknown game language {lang_in!r}; give one of {language_list([c for c, _ in nacp.LANGUAGES])}, by code or by name')
     env = dict(os.environ, PATH=os.pathsep.join(TOOL_PATHS + [os.environ.get('PATH', '/usr/bin:/bin:/usr/sbin:/sbin')]))
+    pinned_cnmt = env.get('DM_CNMT_DIGEST_ALLOWLIST', '')
+    if pinned_cnmt and not re.fullmatch(r'[0-9A-Fa-f]{64}(,[0-9A-Fa-f]{64}){0,63}', pinned_cnmt):
+        raise BuildError('DM_CNMT_DIGEST_ALLOWLIST requires comma-separated full SHA-256 values')
     env.setdefault('USER', getpass.getuser())   # xcodegen fails without USER (Couldn't find current username)
     configure_dotnet(env)
     env.setdefault('J', str(os.cpu_count() or 8))   # shader_split.py's and dmsh_build.py's workers (their default is 8)

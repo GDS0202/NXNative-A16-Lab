@@ -24,6 +24,7 @@ static class Tests {
     static void Main() {
         foreach (byte kind in new byte[] {0x80, 0x81, 0x82}) {
             var p = PackageMetadata.Parse(Make(kind));
+            Check(p.CnmtDigestVerified);
             Check(p.ApplicationId == App.ToString("X16")); Check(p.Contents.Count == 1);
             Check(p.Contents[0].Size == 0x4000); Check(p.Contents[0].Id.StartsWith("ab"));
             Check(p.Version == (kind == 0x81 ? 1114112u : 0u));
@@ -37,6 +38,30 @@ static class Tests {
         var platform = Make(0x80); platform[0xd] = 1; Seal(platform); Bad(platform);
         var count = Make(0x80); count[0x11] = 0xff; Seal(count); Bad(count);
         var extra = Make(0x81); extra[0x2c] = 1; Seal(extra); Bad(extra);
-        Console.WriteLine("CNMT identity, associations, versions, 48-bit sizes, digest, bounds and truncation: PASS");
+        // A stale digest is never accepted by default or by a different pin.
+        var repacked = Make(0x80); repacked[^1] ^= 1;
+        Bad(repacked);
+        string pin = Convert.ToHexString(SHA256.HashData(repacked)).ToLowerInvariant();
+        var pins = PackageMetadata.DigestAllowlist(pin.ToUpperInvariant());
+        Check(!PackageMetadata.Parse(repacked, pins).CnmtDigestVerified);
+        Check(PackageMetadata.Parse(repacked, pins).ApplicationId == App.ToString("X16"));
+        var changed = (byte[])repacked.Clone(); changed[8] ^= 1;
+        try { PackageMetadata.Parse(changed, pins); throw new Exception("different metadata accepted"); }
+        catch (PackageMetadataException) { }
+        // A matching pin does not excuse bad bounds or missing associations.
+        foreach (int offset in new[] { 0x10, 0x20 }) {
+            var invalid = (byte[])repacked.Clone();
+            if (offset == 0x20) BinaryPrimitives.WriteUInt64LittleEndian(invalid.AsSpan(offset), 0);
+            else invalid[offset] = 0;
+            string hash = Convert.ToHexString(SHA256.HashData(invalid)).ToLowerInvariant();
+            try { PackageMetadata.Parse(invalid, PackageMetadata.DigestAllowlist(hash)); throw new Exception("malformed pinned metadata accepted"); }
+            catch (PackageMetadataException) { }
+        }
+        foreach (string invalid in new[] { "abc", pin + ",", new string('z', 64), " " + pin }) {
+            try { PackageMetadata.DigestAllowlist(invalid); throw new Exception("malformed allowlist accepted"); }
+            catch (PackageMetadataException) { }
+        }
+        Check(PackageMetadata.DigestAllowlist(null).Count == 0);
+        Console.WriteLine("CNMT identity, associations, versions, 48-bit sizes, digest, exact pins, bounds and truncation: PASS");
     }
 }

@@ -25,12 +25,28 @@ sealed class PackageRecord {
     public uint Version { get; set; }
     public string Type { get; set; }
     public string MetadataSha256 { get; set; }
+    public bool CnmtDigestVerified { get; set; }
     public List<PackageContent> Contents { get; set; } = new();
 }
 
 static class PackageMetadata {
     public const int MaxBytes = 16 << 20;
-    public static PackageRecord Parse(ReadOnlySpan<byte> data) {
+    // Repacked own inputs can retain a stale internal digest even though their
+    // NCA hash tree is valid. Only explicitly pinned complete CNMT bytes qualify;
+    // no malformed structure, NCA error or different metadata is exempted.
+    public static HashSet<string> DigestAllowlist(string value) {
+        var result = new HashSet<string>(StringComparer.Ordinal);
+        if (string.IsNullOrEmpty(value)) return result;
+        string[] entries = value.Split(',');
+        if (entries.Length > 64) throw new PackageMetadataException("too many pinned CNMT digests");
+        foreach (string entry in entries) {
+            if (entry.Length != 64 || !Array.TrueForAll(entry.ToCharArray(), Uri.IsHexDigit))
+                throw new PackageMetadataException("CNMT allowlist requires comma-separated SHA-256 values");
+            result.Add(entry.ToLowerInvariant());
+        }
+        return result;
+    }
+    public static PackageRecord Parse(ReadOnlySpan<byte> data, IReadOnlySet<string> digestAllowlist = null) {
         if (data.Length < 0x40 || data.Length > MaxBytes)
             throw new PackageMetadataException("invalid CNMT length");
         ulong id = BinaryPrimitives.ReadUInt64LittleEndian(data);
@@ -49,7 +65,9 @@ static class PackageMetadata {
         uint extra = type == 0x81 ? BinaryPrimitives.ReadUInt32LittleEndian(data[0x2c..]) : 0;
         long expected = 0x20L + ext + count * 0x38L + metas * 0x10L + extra + 32;
         if (expected != data.Length) throw new PackageMetadataException("truncated or inconsistent CNMT tables");
-        if (!CryptographicOperations.FixedTimeEquals(SHA256.HashData(data[..^32]), data[^32..]))
+        string metadataSha256 = Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant();
+        bool digestVerified = CryptographicOperations.FixedTimeEquals(SHA256.HashData(data[..^32]), data[^32..]);
+        if (!digestVerified && (digestAllowlist == null || !digestAllowlist.Contains(metadataSha256)))
             throw new PackageMetadataException("CNMT digest mismatch");
         ulong parent = BinaryPrimitives.ReadUInt64LittleEndian(data[0x20..]);
         if (parent == 0) throw new PackageMetadataException("CNMT association is missing");
@@ -57,7 +75,7 @@ static class PackageMetadata {
             TitleId = id.ToString("X16"), ApplicationId = (type == 0x80 ? id : parent).ToString("X16"),
             PatchId = type == 0x80 ? parent.ToString("X16") : null,
             Version = version, Type = type switch { 0x80 => "Application", 0x81 => "Patch", _ => "AddOnContent" },
-            MetadataSha256 = Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant()
+            MetadataSha256 = metadataSha256, CnmtDigestVerified = digestVerified
         };
         var ids = new HashSet<string>(StringComparer.Ordinal);
         for (int i = 0; i < count; i++) {
