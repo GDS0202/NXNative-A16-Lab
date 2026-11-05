@@ -36,12 +36,9 @@ rewritten. Inspection reports `cnmt_digest_verified: false` and the builder logs
 the explicit pin. This is an opt-in compatibility workaround, not proof of
 Nintendo authenticity or permission to accept unknown corrupt packages.
 
-On 2026-11-05 the owner's existing BOTW base/update, already used for the prior
-playable build, passed transfer and meta-NCA checks but failed the new internal
-CNMT digest comparison. A private inspection established both exact complete
-metadata hashes; only those are pinned in that private build. Which upstream
-packing tool changed their metadata remains unknown. No public game hashes or
-hard-coded game exception is added to the parser.
+The [BOTW input note](../dm/games/01007EF00011E000/README.md#input-metadata-compatibility)
+records a private build using this option. No public game hashes or hard-coded
+game exception is added to the parser.
 
 The build needs .NET 10 on the machine doing extraction. Cloud builds install
 it on the runner; the Mac client still needs only Python, Git and `gh`.

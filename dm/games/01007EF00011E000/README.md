@@ -269,3 +269,19 @@ Actual private inspection confirmed the 256x1024 BC4 glyph sheet, 50x50 cells,
 5x20 grid and R8 action-guide textures. PlayStation labels add an external-font
 reference instead of substituting Xbox letters. Archive validation is distinct
 from checking font resolution, visuals and memory during actual gameplay.
+
+## Input metadata compatibility
+
+On 2026-11-05 the owner's existing base XCI was found to contain both the
+Application v0 record and an older Patch v720896, alongside the separate
+Patch v1114112 (1.9.0) NSP. All three CNMT records have stale internal digests.
+Transfer hashes, meta-NCA reads, table bounds, content IDs/sizes and program
+associations passed private inspection. The original packing tool or mutation
+that produced the stale digests remains unknown.
+
+The private build pins all three complete CNMT SHA-256 values through the
+[explicit compatibility option](../../../docs/input-detection.md), keeps the
+original inputs unchanged, and selects v1114112 with strict module build IDs.
+The older patch inside the XCI must be inspected even though it is not selected
+for the delivered game. This is an exact-input workaround, not a global digest
+or NCA-integrity bypass. No game hashes are added to the public parser.
