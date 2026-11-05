@@ -32,7 +32,7 @@ Every piece of code that runs for one game and not the others: the rewriter's pa
 | [SHIN MEGAMI TENSEI V: Vengeance](#shin-megami-tensei-v-vengeance) | 1 | 1 | 0 | 0 | 3 | yes |
 | [Super Smash Bros. Ultimate](#super-smash-bros-ultimate) | 11 | 0 | 0 | 1 | 0 | yes |
 | [Taiko Risshiden V DX](#taiko-risshiden-v-dx) | 1 | 0 | 0 | 2 | 0 | yes |
-| [The Legend of Zelda: Breath of the Wild](#the-legend-of-zelda-breath-of-the-wild) | 7 | 0 | 5 | 0 | 0 | yes |
+| [The Legend of Zelda: Breath of the Wild](#the-legend-of-zelda-breath-of-the-wild) | 7 | 0 | 6 | 0 | 0 | yes |
 | [The Legend of Zelda: Link's Awakening](#the-legend-of-zelda-links-awakening) | 1 | 0 | 0 | 0 | 0 | yes |
 | [The Legend of Zelda: Tears of the Kingdom](#the-legend-of-zelda-tears-of-the-kingdom) | 0 | 0 | 11 | 0 | 0 | yes |
 | [Xenoblade Chronicles 3](#xenoblade-chronicles-3) | 6 | 0 | 0 | 0 | 0 | yes |
@@ -490,6 +490,7 @@ Every piece of code that runs for one game and not the others: the rewriter's pa
   - cut `+0x1126794`: stepping down stops at < 3 → at < 2: cmp w9,#3 → cmp w9,#2
   - cut `+0x112691c`: interval controller always takes the GPU time path (CPU span timing): cbz x0,#0x1126934 → b #0x1126928
   - cut `+0x1126974`: interval controller always takes the GPU time path (takes max(CPU span, GPU time)): cbz x0,#0x112698c → b #0x1126980
+  - frame step `+0xc2dbd0`: optional camera far clip from host state +0x18; zero preserves the original
   - frame step `+0xeb0f88`: held-button counts step by the VFR ratio (menu repeat in game time at any frame step)
   - frame step `+0x11269b8`: setWaitVsyncInterval: the host's step unless the VFR override is set (state page target fps; 0 = the game's interval)
   - frame step `+0x126686c`: scale apply block taken every frame when the host render scale is not 1.0
@@ -670,6 +671,7 @@ Profile keys (`game.tsv`) whose value changes what the host does, set away from 
 | `game_env DOTNET_GCRegionRange=60000000` | [Absolum](../../dm/games/0100A83022A22000/README.md) |
 | `present_snap on` | [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md) |
 | `pso_mtl4 on` | [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md) |
+| `render_base 1600x900 1280x720` | [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md) |
 | `stdalloc_cap 0xa0000000` | [Absolum](../../dm/games/0100A83022A22000/README.md) |
 | `vconv_range on` | [Hyrule Warriors: Age of Calamity](../../dm/games/01002B00111A2000/README.md) |
 | `fps_hold off` | [Hyrule Warriors: Age of Calamity](../../dm/games/01002B00111A2000/README.md), [Paper Mario: The Thousand-Year Door](../../dm/games/0100ECD018EBE000/README.md) |

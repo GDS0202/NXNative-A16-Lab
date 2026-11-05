@@ -28,7 +28,14 @@ jobs:
           dotnet build dm/tools/nx_extract -c Release --nologo
           dotnet run --project dm/tools/tests/cnmt -c Release
           python -m unittest dm/tools/tests/test_nsp_scan.py dm/tools/tests/test_nsp_nsz.py dm/tools/tests/test_nsp_external_drive.py dm/tools/tests/test_nsp_incremental.py
-      - run: python -m pip install texture2ddecoder Pillow
+      - run: python -m pip install texture2ddecoder Pillow unicorn
+      - name: Live quality controller and executable AArch64 guest fixtures
+        run: |
+          clang -O1 -g -Wall -Wextra -Werror -pthread -fsanitize=address,undefined dm/gfx/tests/t_tuning.c dm/gfx/nvn/nvn_tuning.c -lm -o /tmp/tuning
+          /tmp/tuning
+          clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_romfs_overlay.c dm/host/hle_romfs_overlay.c -o /tmp/overlay
+          /tmp/overlay
+          python -m unittest -v dm/tools/tests/test_botw_live_stubs.py
       - name: Exact BC upload bytes, independent ASTC decode, odd mips and pitches
         run: python -m unittest -v dm/gfx/tests/test_bc_soft.py
       - name: Serial component benchmark (no gameplay claims)

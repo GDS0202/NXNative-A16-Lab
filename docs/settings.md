@@ -1,5 +1,9 @@
 # Settings
 
+The A16 lab adds an experimental [live graphics menu, automatic quality and
+controller prompts](live-quality.md). Controls are offered only when the packed
+game has the verified guest stubs; automatic quality is off by default.
+
 The screen before the game starts shows the settings the game supports. A setting that only matters while another is on appears under it and disappears when that one is turned off. Tap **Play** to start; the app remembers your choices for the next start. All settings are on one scrollable screen, under **Game**, **Controls** and **Performance**. Tap a menu or move a slider there; no settings page needs opening. **Upscaling** is in **Game**, beside **Console mode**. A Mac app shows the same settings in a [window of its own](#the-mac-settings-window).
 
 - [Tested defaults](#tested-defaults)

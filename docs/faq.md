@@ -21,10 +21,11 @@ would be reported separately from real frames.
 A16-only host instruction-set requirement. GPU capabilities, OS, game features,
 process memory and sustained device behavior still need tests.
 
-**Why are textures purple?** That has not been isolated on the user's device.
-Possible paths include invalid ASTC blocks, render feedback and dynamically
-encoded BC4. Do not apply global snapshot/barrier changes blindly. See the
-[diagnostic steps](performance.md#purple-artifacts).
+**Were purple artifacts reported for this recompilation?** No. On 2026-11-05
+the user clarified that they occurred only in the earlier MeloNX project.
+The lab does not enable a speculative visual workaround for that report.
+General [rendering diagnostics](performance.md#historical-rendering-diagnostics)
+remain available for a separately evidenced problem.
 
 **Why does the builder call my base an update?** The new reader uses internal
 Application/Patch/AddOnContent CNMTs, not `[BASE]`, `[vN]` or title tags in the

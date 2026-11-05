@@ -36,6 +36,7 @@
 #include "nvn_frame_metrics.h"
 #include "nvn_stutter.h"
 #include "nvn_warm_budget.h"
+#include "nvn_tuning.h"
 #include "dmsh_chain.h"   // DMSH_CHAIN: the translation chain version of the B shader library expected by this source tree, one for every game (beside this file, tools/dmsh_chain.py --header)
 #include "game_profile.h"   // game profile constants (profile id, the profile's switches)
 // Texture slot table per stage: 0-127 the combined handles (nvnCommandBufferBindTexture), 128-255 the separate texture binds (NVN_SEPTEX_SLOT0, nvn_obj.h)
@@ -880,9 +881,11 @@ static int tbdr_on(void);
 static void treg_finish_submission(void);
 
 static uint64_t g_sub_serial;   // Submission index (used by the parallel precompile's 'predict only once per submission')
+static void quality_samplers_refresh(void);
 void mtl_sub_begin(void) {
     mtl_init(); g_sub_serial++; g_seg = 0; seg_clk_put(g_sclk); g_sclk = NULL; g_rc_npend = 0; g_rc_skip = 0;
     defer_drain();
+    quality_samplers_refresh();
     defer_reset();
     if (!g_warm_started && prepare_on()) shmap_load();   // the first submission: the prepare step (warm_start), before anything of it is encoded
     warm_claim();
@@ -4233,6 +4236,20 @@ void mtl_reg_samp(int sid, const samp_par *sp) {
     g_sreg[id_] = *sp; g_sreg_ok[id_] = 1;
     os_unfair_lock_unlock(&g_rmu);
 }
+static void quality_samplers_refresh(void) {
+    static int previous;
+    int quality = dm_tuning_texture();
+    if (quality == previous) return;
+    os_unfair_lock_lock(&g_rmu);
+    for (int i = 0; i < g_nsreg; i++) if (g_sview[i]) {
+        // Encoded argument buffers can still refer to the old sampler's GPU ID.
+        // Keep it alive through the submission fence, just like retired views.
+        id old = CFBridgingRelease(g_sview[i]); defer_obj_unref(old);
+        g_sview[i] = NULL; g_srid[i] = 0;
+    }
+    g_reg_gen++; args_dirty_all(); previous = quality;
+    os_unfair_lock_unlock(&g_rmu);
+}
 // Handles of deferred binds (BindTexturesDeferred) are read at execution: the record keeps the address of the handles (see hle_nvn.c); every reader of a bind record refreshes it first. Command memory is writable, so it is updated in place
 static inline void bh_fresh(const p_bind_handles *b) {
     if (b->defer && b->src && b->n > 0 && b->n <= 32) memcpy((void *)b->h, (const void *)(uintptr_t)b->src, 8 * (size_t)b->n);
@@ -4475,6 +4492,13 @@ static id<MTLSamplerState> samp_by_id(int sid) {   // Caller holds g_rmu
     d.sAddressMode = wrapm(p.ws); d.tAddressMode = wrapm(p.wt); d.rAddressMode = wrapm(p.wr);
     d.lodMinClamp = p.lod_min < 0 ? 0 : p.lod_min; d.lodMaxClamp = p.lod_max;
     d.maxAnisotropy = p.aniso < 1 ? 1 : p.aniso > 16 ? 16 : (NSUInteger)p.aniso;
+    // Player-selected filtering only: never change compare/reduction samplers
+    // (shadows, depth pyramids), or pretend this frees full-resolution textures.
+    int quality = dm_tuning_texture();
+    if (quality && !p.cmp_mode && !p.reduction && d.mipFilter != MTLSamplerMipFilterNotMipmapped) {
+        d.maxAnisotropy = MIN(d.maxAnisotropy, quality == 1 ? 2 : 1);
+        if (quality == 2 && d.lodMaxClamp >= 1) d.lodMinClamp = MAX(d.lodMinClamp, 1);
+    }
     if (p.cmp_mode) d.compareFunction = (MTLCompareFunction)(p.cmp_func - 1);
     // Reduction (NVN 1 min / 2 max): the minimum or maximum of the texels a filtered sample covers, per channel (Metal 26). Pokémon Legends: Z-A builds its depth pyramid with a min sampler
     // (151607c7a92386cc reads the level above at an explicit LOD) and tests occlusion boxes against it; averaged, the pyramid is nearer than the scene at depth edges. Metal ignores the reduction
@@ -6316,6 +6340,7 @@ __attribute__((weak)) void front_progress(const char *title, long done, long tot
 static int prepare_on(void) {
     static int v = -1;
     if (v < 0) { const char *e = getenv("DM_PSO_PREPARE");
+        if (e && !strcmp(e, "auto")) e = NULL;
         if (e && !strcmp(e, "0")) { MLOG("DM_PSO_PREPARE=0: the pipeline prewarm runs in the background, the game does not wait for it"); v = 0; }
         else v = (e && !strcmp(e, "1")) || (front_metal_layer() != NULL && !(NSProcessInfo.processInfo.physicalMemory <= 6.5 * 1073741824.0 && !e));   // 6 GB devices: in the background, no waiting screen (the list is the profile's alone there)
         if (!v && !e) MLOG("pipeline prepare: off on this 6 GB device, the prewarm runs in the background (DM_PSO_PREPARE=1 turns the waiting screen back on)"); }
@@ -10676,8 +10701,11 @@ static fx_state g_fx_present;   // only the present thread encodes or replaces t
 static id<MTL4Compiler> g_fx_comp;
 static int g_fx_mode = -1;   // 1 = metalfx, 0 = off
 static int fx_mode(void) {
-    if (g_fx_mode >= 0) return g_fx_mode;
-    const char *e = getenv("DM_PRESENT_UPSCALE"); int v = 0;
+    static int previous = -2;
+    int requested = dm_tuning_upscale();
+    if (previous == requested && g_fx_mode >= 0) return g_fx_mode;
+    previous = requested;
+    const char *e = requested < 0 ? getenv("DM_PRESENT_UPSCALE") : requested ? "metalfx" : "off"; int v = 0;
     if (e && (!strcmp(e, "metalfx") || !strcmp(e, "1"))) v = 1;
     else if (e && (!strcmp(e, "off") || !strcmp(e, "0"))) v = 0;
     else if (e && *e) MLOG("[RED] DM_PRESENT_UPSCALE=%s: metalfx or off; keeping %s", e, v ? "metalfx" : "off");
@@ -10917,7 +10945,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     [dr addPresentedHandler:^(id<MTLDrawable> d) {   // Actual presentation time (the time this frame is really put on screen, CACurrentMediaTime base)
         CFTimeInterval tt = d.presentedTime;
         g_pres[pn % PRING] = (pres_ent){pn, tt > 0 ? tt : -1};
-        if (tt > 0) { atomic_fetch_add(&g_displayed_n, 1); atomic_store(&g_displayed_ticket, pn); atomic_store(&g_displayed_frame, frame); nvn_frame_metrics_record((uint64_t)(tt * 1e9)); nvn_stutter_present(frame, pn, (uint64_t)(tt * 1e9)); }
+        if (tt > 0) { atomic_fetch_add(&g_displayed_n, 1); atomic_store(&g_displayed_ticket, pn); atomic_store(&g_displayed_frame, frame); nvn_frame_metrics_record((uint64_t)(tt * 1e9)); nvn_stutter_present(frame, pn, (uint64_t)(tt * 1e9)); dm_tuning_present((uint64_t)(tt * 1e9)); }
     }];
     // Each frame is displayed for at least one present period: when the GPU completion time jitters around a 120 Hz refresh boundary, the paired "25 ms + 8.33 ms" stutter no longer appears
     if (target_ts > 0) [dr present];

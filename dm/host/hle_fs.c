@@ -17,6 +17,7 @@
 #include <sys/clonefile.h>
 #include <sys/xattr.h>
 #include "romfs_image.h"
+#include "romfs_overlay.h"
 
 // Every take-over in this file runs on the big host stack (hle_bigstack.c): path buffers are sized by PATH_MAX and one file open takes 6-7 KB of stack, while a game's save thread can have as little as 8 KB (Super Mario 3D World + Bowser's Fury)
 #undef HLE_FORCE
@@ -51,7 +52,7 @@ _Static_assert(sizeof(DirectoryEntry) == 0x310, "DirectoryEntry layout");
 typedef struct {
     char name[32]; char dir[1024]; char overlay[4096]; char commit[1024];
     romfs_img *img;                  // non-NULL: dir is a RomFS image file
-    int ro;
+    int ro, game_romfs;
     int txn_root;                    // canonical mount entry for this backing transaction, or -1
     _Atomic int poison;              // failure state belongs to this backing, not to the process
     _Atomic uint64_t first_write_ns;
@@ -429,10 +430,11 @@ HLE_FORCE("_ZN2nn2fs22QueryMountRomCacheSizeEPm", "fsp-srv; rom reads the host d
 HLE_FORCE("_ZN2nn2fs8MountRomEPKcPvm", "fsp-srv; rom → host RomFS directory", Result, h_fs_MountRom, const char *name, void *cache, size_t sz) {
     (void)cache; (void)sz; char b[1024];
     Result r = mount(name, envdir("DM_ROMFS", "romfs", b, sizeof b), 1);
-    if (r == RES_OK && getenv("DM_ROMFS_OVERLAY")) {
+    if (r == RES_OK) {
         PATH_LOCK();
         for (int i = 0; i < g_nmnt; i++) if (!strcmp(g_mnt[i].name, name)) {
-            strlcpy(g_mnt[i].overlay, getenv("DM_ROMFS_OVERLAY"), sizeof g_mnt[i].overlay); break;
+            g_mnt[i].game_romfs = 1;
+            if (getenv("DM_ROMFS_OVERLAY")) strlcpy(g_mnt[i].overlay, getenv("DM_ROMFS_OVERLAY"), sizeof g_mnt[i].overlay); break;
         }
     }
     return r;
@@ -709,6 +711,20 @@ HLE_FORCE("_ZN2nn2fs7UnmountEPKc", "fsp-srv; the mount table is permanent, unmou
 
 // ---------- Files ----------
 HLE_FORCE("_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci", "fsp-srv → open(2)", Result, h_fs_OpenFile, uint64_t *out, const char *path, int mode) {
+    if (!path) return RES_PATH_NOT_FOUND;
+    const char *colon = strchr(path, ':');
+    int game_romfs = 0;
+    if (colon && dm_romfs_overlay_candidate(colon + 1)) { PATH_LOCK();
+        for (int i = 0; i < g_nmnt; i++) if (g_mnt[i].game_romfs && strlen(g_mnt[i].name) == (size_t)(colon - path) && !strncmp(path, g_mnt[i].name, (size_t)(colon - path))) { game_romfs = 1; break; } }
+    if (!(mode & (MODE_WRITE | MODE_APPEND)) && game_romfs) {
+        int fd = dm_romfs_overlay_open(colon + 1);
+        if (fd >= 0) {
+            if (fd >= (int)sizeof g_fmode) { close(fd); return RES_FAIL; }
+            g_fmode[fd] = (uint8_t)mode; atomic_store(&g_ftxn[fd], 0); *out = FH_OUT(fd);
+            if (g_flag.fs) LOG("fs open overlay %s → fd %d", path, fd);
+            return RES_OK;
+        }
+    }
     int mi; int64_t k;
     if (img_path(path, &mi, &k)) {
         if (k < 0) return err_res("open", path);

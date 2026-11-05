@@ -242,7 +242,8 @@ registered 1.9.0 module builds instead of silently deriving a different profile.
 ## A16 experimental follow-up (2026-11-04)
 
 The private 1.9.0 build from the A16 lab fork boots and plays according to its
-user, with purple artifacts and intermittent stalls. No device trace or measured
+user, with intermittent stalls. On 2026-11-05 the user clarified that purple
+artifacts occurred only in MeloNX, never in this recompilation. No device trace or measured
 FPS baseline has been supplied. Source CI and synthetic component tests do not
 upgrade that report to validated gameplay.
 
@@ -250,3 +251,21 @@ Found on this game: the common tracker has the [retired-pool protection race](..
 Its correction is covered by a targeted CPU test, not yet an iPad gameplay test.
 The new [recording and A/B route](../../../docs/performance.md) is the acceptance
 path before changing worker defaults or claiming reduced stutter.
+
+## Live quality and controller prompts (experimental)
+
+The A16 lab's [live quality controls](../../../docs/live-quality.md) add a
+build-gated full-scale flag and optional active-camera far clip. The clip store
+at `main+0xc2dbd0` is asserted before replacement. It is not actor traversal,
+terrain LOD, or an unverified engine constant. Synthetic AArch64 execution checks
+both paths and preservation of the original registers/flags; an iPad route is
+still required. The automatic controller is off by default and reports when
+the requested internal-quality floor prevents meeting its real FPS target.
+
+The controller-asset adapter uses this build's `Font/Font_*.sbfarc` external
+bitmap font and `Pack/Bootup.pack` action-guide layouts. Only the generator is
+public; both controller styles are made from the player's own resources.
+Actual private inspection confirmed the 256x1024 BC4 glyph sheet, 50x50 cells,
+5x20 grid and R8 action-guide textures. PlayStation labels add an external-font
+reference instead of substituting Xbox letters. Archive validation is distinct
+from checking font resolution, visuals and memory during actual gameplay.

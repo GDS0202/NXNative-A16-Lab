@@ -1151,6 +1151,7 @@ obs += region_obs
 FRAME_STEP = PATCHES['FRAME_STEP']
 FS_STATE_OFF = 0
 RENDER_SCALE = 0   # 1 = the build has a render-scale stub (state +0x10): the fixups table says so (RENDER_SCALE), and the iOS launcher offers the setting (dm/games/settings.tsv)
+RUNTIME_TUNING = 0  # capability bits of verified live-quality guest stubs
 if BUILD_ID in FRAME_STEP and NAME == 'main':
     FS_STATE_OFF = KEY_PAGE_OFF + 0x4000
     if FAR:
@@ -1170,6 +1171,7 @@ if BUILD_ID in FRAME_STEP and NAME == 'main':
 if FS_STATE_OFF:   # the build's stubs (FRAME_STEP of its patches.py)
     fs = types.SimpleNamespace(here=here, emit=emit, site=fs_site, put=fs_put, state=FS_STATE_OFF, render_scale=0)
     FRAME_STEP[BUILD_ID](fs); RENDER_SCALE = fs.render_scale
+    RUNTIME_TUNING = getattr(fs, 'runtime_tuning', 0)
 
 # ---- Spin waits (every module) ----
 # A guest loop that polls memory until another thread changes it fills only its own core on the Switch, where any higher-priority thread pinned there preempts it, so the
@@ -1478,6 +1480,7 @@ with open(P('fixups.tsv'), 'w') as f:
     for k in KEY_INDEX: f.write(f'# KEY_{k}_IDX\t{KEY_INDEX[k]}\n')
     if FS_STATE_OFF: f.write(f'# FPS_STATE_OFF\t{FS_STATE_OFF:#x}\n')   # frame step state page (FRAME_STEP): the loader writes the target fps there
     if RENDER_SCALE: f.write('# RENDER_SCALE\t1\n')   # a render-scale stub reads state +0x10 (the loader ignores the key; dm/games/settings.py offers the setting by it)
+    if RUNTIME_TUNING: f.write(f'# RUNTIME_TUNING\t{RUNTIME_TUNING:x}\n')
     if NAME == 'main':
         for capability in PATCHES['CAPABILITIES'].get(BUILD_ID, ()):
             assert re.fullmatch(r'[A-Z][A-Z0-9_]*', capability), f'invalid capability {capability}'

@@ -953,3 +953,11 @@ Digimon Story Cyber Sleuth: Complete Edition (Media.Vision's MVGL engine, SDK 6.
 - **Cause:** A16 cannot sample BC directly. The inherited fallback decoded and encoded each uploaded level again and dispatched large levels across all CPU cores.
 - **Fix:** exact whole-field ASTC packing, at most two conversion participants by default (maximum four), and a content/layout/revision keyed disk cache. Cached output is bound to the input key and integrity checked. One utility write slot bounds copied output to 16 MiB; a 256 MiB disk budget is pruned after writes. CPU staging is reused only after its upload slot completes. The iOS output drawable defaults to 720p independently of the guest render scale.
 - **Found on:** source audit and synthetic upload/cache checks for [BOTW A16 work](../a16.md). Actual A16 workload and picture validation are pending.
+
+
+### Opt-in live quality with verified guest state
+
+- **Symptom:** a player cannot change scene quality while playing, and output resolution is mistaken for internal scene detail.
+- **Cause:** cached startup settings and native dynamic scaling have different semantics from a fixed internal-quality floor.
+- **Fix:** the [experimental live-quality controller](../live-quality.md) uses explicit build capabilities, aligned state-page stores, bounded GPU observations and hysteresis. Descriptor changes retire old sampler IDs behind GPU fences. No barrier or correctness snapshot is removed. Unsupported games expose only the controls their backends actually implement.
+- **Found on:** [BOTW 1.9.0](../../dm/games/01007EF00011E000/README.md#live-quality-and-controller-prompts-experimental), synthetic execution/archive fixtures; device validation pending.

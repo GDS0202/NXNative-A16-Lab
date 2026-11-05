@@ -92,7 +92,9 @@ def frame_step(ctx):
     apply = here(); emit(ADRP(8, here(), FS_STATE_OFF))
     for w in (0xbd401100,   # ldr s0,[x8,#0x10]      render scale
               0x1e202008,   # fcmp s0,#0.0
-              0x540000ad,   # b.le orig (+5)         not set
+              0x540000ed,   # b.le orig (+7)         not set
+              0xb9401508,   # ldr w8,[x8,#0x14]     explicit full-scale lock
+              0x35000088,   # cbnz w8,force (+4)
               0x1e2e1001,   # fmov s1,#1.0
               0x1e212000,   # fcmp s0,s1
               0x54000040,   # b.eq orig (+2)         1.0: the game's own scale
@@ -102,6 +104,10 @@ def frame_step(ctx):
     emit(B(here(), 0x1266884))
     fs_put(0x1266880, [B(0x1266880, apply)], '3D view scale = the host render scale (1.0 = the game\'s dynamic resolution)'); ctx.render_scale = 1
     start = here(); emit(ADRP(8, here(), FS_STATE_OFF))
+    emit(0xb9401508)         # ldr w8,[x8,#0x14]
+    emit(0x34000048)         # cbz w8,+8
+    emit(B(here(), 0x1266880))
+    emit(ADRP(8, here(), FS_STATE_OFF))
     for w in (0xb9401108,   # ldr w8,[x8,#0x10]      render scale (float bits)
               0x34000088,   # cbz w8,skip (+4)       not set
               0x52091908,   # eor w8,w8,#0x3f800000
@@ -109,6 +115,24 @@ def frame_step(ctx):
         emit(w)
     emit(B(here(), 0x1266880)); emit(B(here(), 0x1266950))   # apply the host's scale; skip: the original branch
     fs_put(0x126686c, [B(0x126686c, start)], 'scale apply block taken every frame when the host render scale is not 1.0')
+
+    # The active camera's far-clip store, independently used by the prior
+    # build-gated 1.9.0 camera mod. This clips the view; it is NOT actor/grass
+    # traversal LOD and must never be sold as a universal draw-distance factor.
+    # Preserve x16, NZCV and s0; integer stores preserve the float's bits.
+    fs_site(0xc2dbd0, '007100bd')
+    start = here()
+    emit(0xf81f0ff0)         # str x16,[sp,#-16]!
+    emit(ADRP(16, here(), FS_STATE_OFF))
+    emit(0xb9401a10)         # ldr w16,[x16,#0x18]
+    emit(0x34000070)         # cbz w16,original (+3)
+    emit(0xb9007110)         # str w16,[x8,#0x70]
+    emit(0x14000002)         # b restore (+2)
+    emit(0xbd007100)         # original: str s0,[x8,#0x70]
+    emit(0xf84107f0)         # ldr x16,[sp],#16
+    emit(B(here(), 0xc2dbd4))
+    fs_put(0xc2dbd0, [B(0xc2dbd0, start)], 'optional camera far clip from host state +0x18; zero preserves the original')
+    ctx.runtime_tuning = 7   # live scale, verified 100% lock, camera far clip
 
 FRAME_STEP = {'cd57b23fa4bbad65803d9788c01821ee': frame_step}
 

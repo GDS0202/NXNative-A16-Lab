@@ -3,12 +3,14 @@
 An experimental, multi-game NXNative fork for Apple hardware whose texture or
 memory capabilities need extra care. **BOTW Switch 1.9.0 on a 6 GB iPad A16 is
 the first test case.** Its first private build boots and plays according to the
-user, with purple artifacts and intermittent stalls. There is no measured,
+user, with intermittent stalls. The user clarified on 2026-11-05 that purple
+artifacts occurred only in MeloNX, never in this recompilation. There is no measured,
 stable A16 60 fps result yet.
 
 [Compatibility](docs/compatibility.md) · [Technical audit](docs/audit-2026-11-04.md) ·
 [Performance recording and A/B tests](docs/performance.md) ·
 [Cloud builds without local Xcode](docs/cloud-build.md) ·
+[Live quality and controller prompts](docs/live-quality.md) ·
 [Internal input detection](docs/input-detection.md) · [FAQ](docs/faq.md)
 
 This fork adds bounded BC→ASTC conversion, exact faster ASTC packing, verified
