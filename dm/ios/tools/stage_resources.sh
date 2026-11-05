@@ -24,6 +24,13 @@ case "$DM_RESOURCE_MSLDIR" in b-*)
 esac
 echo 'Copy game resources (the first build copies the complete game; later builds sync changes)'
 mkdir -p "$APP/msl/$DM_RESOURCE_MSLDIR"
+# Generate prompt fonts/layouts only from this player's matching own game data.
+# No runtime Python dependency or original RomFS mutation is introduced.
+controller_build=$(sed -n 's/^# BUILD_ID[[:space:]]*//p' "$SRCROOT/Gen/dm/main.fixups.tsv" 2>/dev/null || true)
+if [ "${DM_RESOURCE_TITLE:-}" = 01007EF00011E000 ] && [ "$controller_build" = cd57b23fa4bbad65803d9788c01821ee ]; then
+    python3 -I "$resource_dm/../scripts/make_controller_icons.py" --romfs "$DM_RESOURCE_ROMFS" \
+        --out "$APP/ControllerIcons" --build-id "$controller_build" || die 'Controller prompt generation failed'
+fi
 # DM_COPY_ROMFS=NO: the game files stay out of the app (main.m takes Documents/romfs first, copied there once): a reinstall then sends the code and shaders, not the whole game
 if [ "${DM_COPY_ROMFS:-YES}" = NO ]; then
     rm -rf "$APP/romfs" "$APP/romfs.img" "$APP/romfs.id"

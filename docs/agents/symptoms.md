@@ -462,6 +462,7 @@ One line per symptom in the [subsystem references](../reference/): what you see 
 - in a capture run every program links with no uniforms; the game's first `Shader:send` raises a Lua error and, on the Switch, its error handler quits (Any Lua error quits a LÖVE game). → [GL shaders put together at run time and captured](../reference/rendering.md#gl-shaders-put-together-at-run-time-and-captured)
 - read-only depth/stencil attachments are written back after every pass, and the periodic unwritten-store savings counter remains zero with the default configuration. → [Unwritten attachment stores without lookahead](../reference/rendering.md#unwritten-attachment-stores-without-lookahead)
 - BC-to-ASTC conversion repeats when the game reloads the same texture; all-core conversion competes with live guest and driver work. → [Bounded BC conversion and persistent ASTC uploads](../reference/rendering.md#bounded-bc-conversion-and-persistent-astc-uploads)
+- a player cannot change scene quality while playing, and output resolution is mistaken for internal scene detail. → [Opt-in live quality with verified guest state](../reference/rendering.md#opt-in-live-quality-with-verified-guest-state)
 
 ## Shaders
 

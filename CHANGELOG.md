@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add experimental live graphics controls, a bounded automatic quality
+  controller with a player-selected internal resolution floor, and a 30-second
+  real presentation measurement. No stable-60-fps claim or frame generation.
+- Add verified BOTW 1.9.0 full-scale and camera-clip stubs; retain original
+  behavior unless the player opts in. Older guest images expose no new stubs.
+- Generate Xbox / PlayStation prompt fonts and action-guide layouts from own
+  game data, with physical-position mapping and next-launch selection.
+- Correct the historical artifact report: purple artifacts were MeloNX-only.
+
 - Correct benchmark resolution claims: BOTW scale 1.0 preserves the game's
   dynamic resolution. Remove the NieR-only dynamic toggle from BOTW profiles;
   a nominal 720p output is not proof of a fixed internal 720p scene.
@@ -25,7 +34,8 @@
 - Add controlled upstream observation drafts, compatibility/benchmark/security
   documentation, contribution guidance and license provenance.
 
-Known limits: A16 purple artifacts and intermittent stalls need device traces;
+Known limits: intermittent stalls need device traces; the purple-artifact
+report was corrected on 2026-11-05 as MeloNX-only;
 there is no measured 60 fps guarantee. GPU-written BC4 semantics and optional
 frame generation remain open. Source/synthetic validation is not gameplay proof.
 
@@ -34,4 +44,5 @@ frame generation remain open. Source/synthetic validation is not gameplay proof.
 Bounded BC conversion, exact ASTC packing improvements, verified persistent
 texture cache, fenced staging reuse, pressure guard, bounded learned prep,
 720p output defaults and private cloud building. The user's private BOTW 1.9.0
-build reached gameplay with unresolved artifacts/stalls.
+build reached gameplay with unresolved stalls. The artifact report was later
+corrected as belonging only to MeloNX.

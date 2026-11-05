@@ -20,6 +20,7 @@ are not licensed or supplied by this project and do not belong in public builds.
 | FLIP verification tools | BSD 3-Clause and bundled single-header notices | Optional image verification |
 | Arm astcenc / Compressonator | Research only; their own upstream licenses | No encoder SDK newly incorporated |
 | Atmosphere CNMT structures | GPL source used only as a wire-format reference | Independent parser; no GPL implementation copied |
+| MacNativeGames controller layout helpers | MIT, copyright 2026 MacNativeGames contributors; [license](dm/third_party/licenses/MacNativeGames.txt) | Dependency-free SARC/BFFNT/BFLYT/Yaz0 helpers from `games/totk/scripts/make_botw_button_icons.py`, blob `6ff3511b7a4b5938d0babe7c27d4e0f3627133a3`; glyph drawing and the NXNative adapter are separate |
 
 See [the vendored inventory](dm/third_party/README.md) and the
 [dated research ledger](docs/audit-2026-11-04.md#research-and-provenance) for

@@ -2,8 +2,10 @@
 
 The goal is sustained real-frame pacing and correct rendering. There is no
 measured A16 60 fps guarantee. The earlier MeloNX frame rates are not NXNative
-measurements. The current iPad report establishes boot/gameplay with purple
-artifacts and intermittent stalls, without a trace or a measured baseline.
+measurements. The current iPad report establishes boot/gameplay and intermittent stalls,
+without a trace or a measured baseline. On 2026-11-05 the user clarified that
+purple artifacts occurred only in MeloNX, never in this recompilation.
+See [live quality and the corrected report](live-quality.md).
 
 ## Capture one useful baseline
 
@@ -127,8 +129,8 @@ Do not delete saves or reinstall the app to create a cold texture cache.
 
 Two workers and a 1024 learned-record budget remain conservative experimental
 defaults. There is no evidence yet that four workers or an adaptive manager is
-better on this iPad. An adaptive controller is deferred until fixed settings
-have device measurements. Likewise, the current learned list retains newest
+better on this iPad. The new [automatic quality controller](live-quality.md) is explicitly opt-in
+and still needs paired device measurements; it does not change those worker defaults. Likewise, the current learned list retains newest
 first-discovered records, not measured most-used pipelines; usage-weighted
 preparation needs reuse/cost data before replacing that policy.
 
@@ -136,8 +138,10 @@ On a 60 Hz display, 30 and 60 fps have regular refresh divisors. A 25 fps cap
 cannot produce equally spaced refreshes on that display. Prefer a measured
 stable 30 fps option over an unproven 60 fps claim, while keeping a 60 fps trial.
 
-## Purple artifacts
+## Historical rendering diagnostics
 
+No purple artifacts are reported for NXNative. The following are general
+compatibility diagnostics, not an active A16 purple-artifact investigation.
 There are at least two distinct mechanisms to separate: invalid/zero ASTC
 blocks in streamed content and same-pass render feedback. GPU-written BC4
 through an integer view is a third compatibility gap in the software-BC path.

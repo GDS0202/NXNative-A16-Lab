@@ -26,6 +26,20 @@ not hash every multi-gigabyte NCA during a quick input scan. Strict game build
 IDs remain an additional, independent gate before build-specific patches run.
 Do not use `--allow-damaged` for a diagnostic baseline.
 
+An explicitly trusted repacked input may have an NCA-valid CNMT whose internal
+digest no longer matches. The default still rejects it. For such a known file,
+`DM_CNMT_DIGEST_ALLOWLIST` accepts a comma-separated list of complete CNMT SHA-256
+values. A pin exempts only that exact byte sequence from the internal-digest
+comparison. Bounds, associations, referenced NCA sizes, NCA section integrity
+and strict NSO build-ID gates still apply; the input and its digest are never
+rewritten. Inspection reports `cnmt_digest_verified: false` and the builder logs
+the explicit pin. This is an opt-in compatibility workaround, not proof of
+Nintendo authenticity or permission to accept unknown corrupt packages.
+
+The [BOTW input note](../dm/games/01007EF00011E000/README.md#input-metadata-compatibility)
+records a private build using this option. No public game hashes or hard-coded
+game exception is added to the parser.
+
 The build needs .NET 10 on the machine doing extraction. Cloud builds install
 it on the runner; the Mac client still needs only Python, Git and `gh`.
 Inspection tools/logs live in `_nx_inputs/` beside the user's packages, outside

@@ -11,6 +11,7 @@ int dm_mem_guard(void);   // nvn_mtl.m: the memory guard level, shown in the HUD
 #include "front.h"
 #include "nvn_frame_metrics.h"
 #include "nvn_stutter.h"
+#include "nvn_tuning.h"
 #include "bc_cache.h"
 #include "hle.h"
 #include "dm.h"
@@ -48,7 +49,7 @@ static int g_hud;   // DM_METAL_HUD: the counter grows into a HUD (front_ios_fps
     [super layoutSubviews];
     CAMetalLayer *l = (CAMetalLayer *)self.layer;
     CGSize size = CGSizeMake(self.bounds.size.width * l.contentsScale, self.bounds.size.height * l.contentsScale);
-    const char *e = getenv("DM_OUTPUT_HEIGHT"); int cap = e ? atoi(e) : 720;
+    const char *e = getenv("DM_OUTPUT_HEIGHT"); int cap = dm_tuning_active() ? dm_tuning_output() : e ? atoi(e) : 720;
     // The guest's internal render scale is separate. Avoid allocating a Retina
     // drawable ring just to stretch a 720p game. UIKit keeps its native scale.
     if ((cap == 720 || cap == 900 || cap == 1080) && size.height > cap) {
@@ -62,12 +63,23 @@ static int g_hud;   // DM_METAL_HUD: the counter grows into a HUD (front_ios_fps
 @property (nonatomic, strong) DmGameView *game;
 @property (nonatomic, strong) UIView *pad;
 @property (nonatomic, strong) UILabel *fps;
+@property (nonatomic, strong) UIButton *settingsButton;
 @property (nonatomic) BOOL launched;
 - (void)startGame;
 @end
 static DmRootVC *g_root;
 static void launcher_done(void) { [g_root startGame]; }
 @implementation DmRootVC
+- (void)showGameSettings {
+    if (!dm_tuning_active()) {
+        UIAlertController *notice = [UIAlertController alertControllerWithTitle:@"Game is starting" message:@"Open graphics controls once the first game image appears." preferredStyle:UIAlertControllerStyleAlert];
+        [notice addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:notice animated:YES completion:nil]; return;
+    }
+    void dm_show_tuning(UIViewController *, void (^)(void));
+    __weak DmRootVC *root = self;
+    dm_show_tuning(self, ^{ [root.game setNeedsLayout]; });
+}
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.blackColor;
@@ -101,11 +113,20 @@ static void launcher_done(void) { [g_root startGame]; }
     g_layer = (CAMetalLayer *)self.game.layer;
     if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) { g_layer.developerHUDProperties = @{@"mode": @"default"}; LOG("front end: performance HUD on (DM_METAL_HUD): fps, GPU time, memory and what is left before the limit"); }   // Apple's HUD over the game: frame rate, frame and GPU time, memory
     dm_haptics_apple_init();
+    { void dm_controller_icons_prepare(void); dm_controller_icons_prepare(); }
     self.pad = dm_gamepad_view(self.view.bounds);
     self.pad.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:self.pad];
     self.fps = front_ios_fps_label();   // above the pad, which hides while a controller is connected
     if (self.fps) [self.view addSubview:self.fps];
+    // Separate from the touch pad: connecting a controller must not hide it.
+    self.settingsButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.settingsButton setImage:[UIImage systemImageNamed:@"gearshape.fill"] forState:UIControlStateNormal];
+    self.settingsButton.accessibilityLabel = @"Game graphics and automatic performance";
+    self.settingsButton.backgroundColor = [UIColor.blackColor colorWithAlphaComponent:0.65];
+    self.settingsButton.tintColor = UIColor.whiteColor; self.settingsButton.layer.cornerRadius = 22;
+    [self.settingsButton addTarget:self action:@selector(showGameSettings) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:self.settingsButton];
     [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     UIApplication.sharedApplication.idleTimerDisabled = YES;
     front_ios_boot();
@@ -113,6 +134,7 @@ static void launcher_done(void) { [g_root startGame]; }
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     CGRect b = self.view.bounds; if (!self.game) return;
+    self.settingsButton.frame = CGRectMake(b.size.width - self.view.safeAreaInsets.right - 54, self.view.safeAreaInsets.top + 6, 44, 44);
     CGFloat w = b.size.width, h = b.size.height;   // Fit 16:9 into the whole screen
     if (w / h > 16.0 / 9.0) w = h * 16.0 / 9.0; else h = w * 9.0 / 16.0;
     self.game.frame = CGRectMake(floor((b.size.width - w) / 2), floor((b.size.height - h) / 2), w, h);
@@ -146,18 +168,18 @@ int dm_thermal_now(void) { return (int)NSProcessInfo.processInfo.thermalState; }
 int dm_low_power_now(void) { return NSProcessInfo.processInfo.lowPowerModeEnabled; }   // the frame step does not probe in it (hle_nvn.c fstep_cpu_slowed)
 double dm_brightness_now(void) { return g_brightness; }
 static void front_ios_trace_watch(void) {
-    if (nvn_stutter_enabled()) {
         [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *timer) {
-            (void)timer; task_vm_info_data_t vi = {0}; mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
-            task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vi, &count);
-            nvn_stutter_system(now_ns(), vi.phys_footprint, os_proc_available_memory(), dm_thermal_now(), dm_low_power_now());
+            (void)timer; uint64_t left = os_proc_available_memory();
+            dm_tuning_system(left, dm_thermal_now(), dm_low_power_now());
+            if (nvn_stutter_enabled()) { task_vm_info_data_t vi = {0}; mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+                task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vi, &count);
+                nvn_stutter_system(now_ns(), vi.phys_footprint, left, dm_thermal_now(), dm_low_power_now()); }
         }];
-    }
 
 }
 static void front_ios_power_watch(void) {
-    [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { (void)n; nvn_frame_metrics_reset(); nvn_stutter_boundary(now_ns()); }];
-    [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { (void)n; nvn_stutter_boundary(now_ns()); }];
+    [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { (void)n; nvn_frame_metrics_reset(); nvn_stutter_boundary(now_ns()); dm_tuning_boundary(); }];
+    [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { (void)n; nvn_stutter_boundary(now_ns()); dm_tuning_boundary(); }];
     g_brightness = UIScreen.mainScreen.brightness;
     [NSNotificationCenter.defaultCenter addObserverForName:UIScreenBrightnessDidChangeNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { (void)n; g_brightness = UIScreen.mainScreen.brightness; }];
     [NSNotificationCenter.defaultCenter addObserverForName:NSProcessInfoThermalStateDidChangeNotification object:nil queue:nil usingBlock:^(NSNotification *n) {

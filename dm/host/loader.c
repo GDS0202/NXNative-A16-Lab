@@ -10,6 +10,7 @@
 #include <mach-o/getsect.h>
 #include <mach-o/ldsyms.h>
 #include "hle.h"
+#include "../gfx/nvn/nvn_tuning.h"
 
 module_t *g_mod;
 int g_nmod;
@@ -200,6 +201,7 @@ static void read_layout(module_t *m, const char *dir) {
         else if (!strcmp(key, "RO_OFF")) m->ro_off = v;
         else if (!strcmp(key, "DATA_OFF")) m->data_off = v;
         else if (!strcmp(key, "FPS_STATE_OFF")) m->fps_state_off = v;
+        else if (!strcmp(key, "RUNTIME_TUNING")) m->runtime_tuning = (unsigned)v;
         else if (!strcmp(key, "BUILD_ID")) sscanf(line, "# %*s %32s", m->build_id);
         else for (int k = 0; k < KEY_N; k++) {
             size_t n = strlen(kn[k]);
@@ -227,7 +229,7 @@ static void install_fps_state(module_t *m) {
 // The settings in the state page, written when the game starts (main.c, after host loading): on iOS the loading runs at app launch, before the launcher has set DM_FPS_TARGET and
 // DM_RENDER_SCALE (Launcher.swift), and nothing reads the page before the game runs
 void dm_fps_state_apply(void) {
-    if (!dm_fps_state) return;
+    if (!dm_fps_state) { dm_tuning_init(NULL, 0, 0, 0); return; }
     const char *e = getenv("DM_FPS_TARGET"); int t = e ? atoi(e) : DM_GAME_FPS_TARGET;
     if (t != 0 && t != 30 && t != 60) { LOG("[RED] DM_FPS_TARGET=%s: must be 0, 30 or 60; using the game's own frame step", e); t = 0; }
     float f = (float)t; memcpy(dm_fps_state, &f, sizeof f);
@@ -236,6 +238,14 @@ void dm_fps_state_apply(void) {
     const char *rs = getenv("DM_RENDER_SCALE"); float sc = 1.0f;
     if (rs) { char *end; sc = strtof(rs, &end); if (end == rs || *end || !(sc >= 0.5f && sc <= 1.0f)) { LOG("[RED] DM_RENDER_SCALE=%s: must be 0.5 to 1.0; keeping the game's size", rs); sc = 1.0f; } else LOG("%s: 3D views rendered at %.2f of the game's size (DM_RENDER_SCALE)", g_fps_mod, sc); }
     memcpy(dm_fps_state + 0x10, &sc, sizeof sc);
+    // A fixed-address feature is offered only when this rewritten module's
+    // fixups attest to its matching guest stubs. A host-only old IPA has none.
+    { unsigned caps = 0;
+      for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) caps = g_mod[i].runtime_tuning;
+      int dw = 0, dh = 0, hw = 0, hh = 0;
+      sscanf(DM_GAME_RENDER_BASE, "%dx%d %dx%d", &dw, &dh, &hw, &hh);
+      const char *mode = getenv("DM_OPMODE"); int handheld = mode ? !atoi(mode) : !DM_GAME_OPMODE;
+      dm_tuning_init(dm_fps_state, caps, handheld ? hw : dw, handheld ? hh : dh); }
     char cap[32]; snprintf(cap, sizeof cap, ", capped at %d fps", t);
     LOG("%s: frame step %s%s (%s)", g_fps_mod, !t ? "as the game sets it" : "in whole vsyncs decided by the host", t ? cap : "", e ? "DM_FPS_TARGET" : "game profile fps_target");
 }

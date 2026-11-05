@@ -19,6 +19,7 @@
 #include "../../host/front.h"
 #include "nvn_dirty.h"
 #include "nvn_stutter.h"
+#include "nvn_tuning.h"
 #include "../tex/bc_cache.h"
 #include <mach/mach_time.h>
 #include <CommonCrypto/CommonDigest.h>
@@ -1876,6 +1877,8 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
             r->hy = (unsigned)(hy - phy); plns = lns; ppns = pns; pup = up; prup = rup; pub = ub; phy = hy;
         }
         plib = lib_; ppso = pso_;
+        dm_tuning_tick(t0, f >= 8 ? mtl_gpu_ms(f - 8) : -1, fr, trace.compile_ms,
+            dm_fps_state && __atomic_load_n((uint32_t *)(dm_fps_state + 0x24), __ATOMIC_RELAXED));
         trow(f, "@t_s", (now_ns() - g_t0_ns) / 1e9);
         trow(f, "@drawable_ms", trace.drawable_ms = mtl_drawable_ns_take() / 1e6);
         trow(f, "@sub_wall_ms", trace.sub_wall_ms = atomic_exchange(&g_sub_wall_ns, 0) / 1e6); trow(f, "@sub_cpu_ms", trace.sub_cpu_ms = atomic_exchange(&g_sub_cpu_ns, 0) / 1e6); trow(f, "@sub_instr", (double)atomic_exchange(&g_sub_instr, 0));
