@@ -21,7 +21,12 @@ int main(void) {
     assert(dm_romfs_overlay_open("symlink") < 0); unlink(link);
     snprintf(link, sizeof link, "%s/pipe", root); assert(!mkfifo(link, 0600));
     assert(dm_romfs_overlay_open("pipe") < 0); unlink(link);
-    unsetenv("DM_ROMFS_MODS"); setenv("DM_CONTROLLER_MODS_ROOT", root, 1);
+    unsetenv("DM_ROMFS_MODS"); setenv("DM_CONTROLLER_MODS_ROOT", "/unavailable", 1);
+    char roots[1024]; snprintf(roots, sizeof roots, "/unavailable:%s:/also-unavailable", root);
+    setenv("DM_ROMFS_OVERLAY", roots, 1);
+    fd = dm_romfs_overlay_open("glyph"); assert(fd >= 0); close(fd);
+    assert(dm_romfs_overlay_open(NULL) < 0);
+    unsetenv("DM_ROMFS_OVERLAY"); setenv("DM_CONTROLLER_MODS_ROOT", root, 1);
     assert(!dm_romfs_overlay_candidate("Map/unrelated")); assert(dm_romfs_overlay_candidate("Font/glyph"));
     unlink(file); rmdir(root);
     puts("read-only overlays: correct reads, namespace filtering, traversal/symlink/FIFO rejection passed");

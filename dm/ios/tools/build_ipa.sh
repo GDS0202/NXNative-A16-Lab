@@ -152,6 +152,12 @@ xcodebuild -project DmIOS.xcodeproj -scheme DmIOS -configuration Release -destin
 # SYMROOT and OBJROOT above keep the unsigned build separate from the interactive Xcode app.
 APP=$DD/Build/Products/Release-iphoneos/DmIOS.app
 [ -n "$APP" ] && [ -d "$APP" ] || die "no built app"; t "app: $APP"
+# The unsigned fast pack skips Xcode's resource-copy phase. Generate controller
+# assets here too, so both packaging paths actually include the feature.
+controller_build=$(sed -n 's/^# BUILD_ID[[:space:]]*//p' "$PATCHED/main.fixups.tsv" 2>/dev/null || true)
+if [ "$GAME" = 01007EF00011E000 ] && [ "$controller_build" = cd57b23fa4bbad65803d9788c01821ee ]; then
+  python3 -I "$DM/../scripts/make_controller_icons.py" --romfs "$ROMFS" --out "$APP/ControllerIcons" --build-id "$controller_build" || die 'controller prompt generation'
+fi
 
 # Straight from the sources: the app without its signature, and without the folders an app built before pack_ipa.py still has (DerivedData keeps resources that left the project;
 # msl/ is also deleted there, it took 1.5 GB of the home disk), then the shader libraries, the add-on content (the RomFS extracted from the player's DLC NSPs, one folder per index:

@@ -17,10 +17,18 @@ static BOOL fixed_key(NSString *key) {
 @property (nonatomic, copy) void (^changed)(void);
 @property (nonatomic, strong) NSTimer *timer;
 @property (nonatomic, strong) UILabel *summary;
+@property (nonatomic, strong) NSSet<NSString *> *supported;
 @end
 @implementation DmTuningVC
 - (void)viewDidLoad {
     [super viewDidLoad]; self.title = @"Graphics and performance";
+    NSURL *settingsURL = [NSBundle.mainBundle.resourceURL URLByAppendingPathComponent:@"dm/launcher.json"];
+    NSData *data = [NSData dataWithContentsOfURL:settingsURL];
+    id decoded = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    NSDictionary *settings = [decoded isKindOfClass:NSDictionary.class] ? decoded : nil;
+    NSMutableSet *supported = [NSMutableSet set];
+    for (NSDictionary *setting in settings[@"settings"]) if ([setting[@"env"] isKindOfClass:NSString.class]) [supported addObject:setting[@"env"]];
+    self.supported = supported;
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"Resume" style:UIBarButtonItemStyleDone target:self action:@selector(resume)];
     self.summary = [UILabel new]; self.summary.numberOfLines = 0;
     self.summary.font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
@@ -47,7 +55,7 @@ static BOOL fixed_key(NSString *key) {
         NSMutableArray *scales = [NSMutableArray array], *names = [NSMutableArray array];
         for (int p = 50; p <= 100; p += 5) { [scales addObject:@(p / 100.0)]; [names addObject:[NSString stringWithFormat:@"%d%% · %d × %d", p, s.width * p / 100, s.height * p / 100]]; }
         [rows addObject:@[@"DM_RENDER_SCALE", @"Manual / starting render scale", @(c.scale / 100.0), scales, names]];
-        [rows addObject:@[@"DM_RENDER_FIXED", @"Lock full scale at 100%", @(c.fixed), @[@0,@1], @[@"Game's dynamic resolution",@"Fixed full scale"]]];
+        if (!c.automatic) [rows addObject:@[@"DM_RENDER_FIXED", @"Lock full scale at 100%", @(c.fixed), @[@0,@1], @[@"Game's dynamic resolution",@"Fixed full scale"]]];
         [rows addObject:@[@"DM_AUTO_TEXTURE", @"Automatic texture filtering", @(c.auto_texture), @[@0,@1], @[@"Off",@"Allowed at resolution floor"]]];
     }
     [rows addObject:@[@"DM_OUTPUT_HEIGHT", @"Display output", @(c.output), @[@720,@900,@1080,@0], @[@"720p",@"900p",@"1080p",@"Native display"]]];
@@ -58,7 +66,11 @@ static BOOL fixed_key(NSString *key) {
         [rows addObject:@[@"DM_AUTO_VIEW", @"Automatic visibility reduction", @(c.auto_clip), @[@0,@1], @[@"Off",@"Allowed at resolution floor"]]];
         [rows addObject:@[@"DM_AUTO_VIEW_FLOOR", @"Minimum camera visibility", @(c.clip_floor), @[@500,@1000,@2000,@5000,@10000], @[@"500",@"1000",@"2000",@"5000",@"10000"]]];
     }
-    return rows;
+    // The same capability list drives startup and live controls; a Vulkan/GL
+    // title must not show an NVN-only sampler control that cannot affect it.
+    return [rows filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(id value, NSDictionary *bindings) {
+        NSArray *row = value; (void)bindings; return [self.supported containsObject:row[0]];
+    }]];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { (void)tableView; return 2; }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { (void)tableView; return section ? 1 : self.rows.count; }
@@ -83,7 +95,8 @@ static BOOL fixed_key(NSString *key) {
             (void)action;
             if (!dm_tuning_set(key.UTF8String, value.doubleValue)) return;
             NSString *saved = [key isEqualToString:@"DM_PRESENT_UPSCALE"] ? (value.intValue ? @"metalfx" : @"off") : value.stringValue;
-            [NSUserDefaults.standardUserDefaults setObject:saved forKey:[@"launcher." stringByAppendingString:key]];
+            const char *keep = getenv("DM_SAVED_CHOICES");
+            if (!keep || strcmp(keep, "0")) [NSUserDefaults.standardUserDefaults setObject:saved forKey:[@"launcher." stringByAppendingString:key]];
             if (weak.changed) weak.changed(); [weak.tableView reloadData]; [weak updateSummary];
         }];
         a.state = [current isEqual:value] ? UIMenuElementStateOn : UIMenuElementStateOff;

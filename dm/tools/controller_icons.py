@@ -185,11 +185,22 @@ def font_icons(font, style):
 
 def playstation_layout(flyt):
     """Use the external icon font for the three unselected face-button labels."""
-    sections, k = [], struct.unpack_from('<H', flyt, 6)[0]
+    # The pane names differ between the four action-guide parts. Their role is
+    # defined by their parent and a one-letter string, as in the Xbox remapper.
+    panes = layout.flyt_panes(flyt)
+    loops = [i for i, (_, _, name, _) in enumerate(panes) if name == 'N_Loop_00']
+    if len(loops) != 1: raise ValueError('action-guide button parent missing')
+    label_offsets = set()
+    for magic, at, _, parent in panes:
+        if magic != 'txt1' or parent != loops[0]: continue
+        text = at + struct.unpack_from('<I', flyt, at + 0x64)[0]
+        if flyt[text:text + 4] in (b'A\0\0\0', b'B\0\0\0', b'X\0\0\0', b'Y\0\0\0'): label_offsets.add(at)
+    if len(label_offsets) != 3: raise ValueError('expected three unselected face labels')
+    sections, section_offsets, k = [], [], struct.unpack_from('<H', flyt, 6)[0]
     while k < len(flyt):
         size = struct.unpack_from('<I', flyt, k + 4)[0]
         if size < 8 or k + size > len(flyt): raise ValueError('BFLYT block bounds')
-        sections.append(bytearray(flyt[k:k + size])); k += size
+        section_offsets.append(k); sections.append(bytearray(flyt[k:k + size])); k += size
     fonts = []
     for block in sections:
         if block[:4] != b'fnl1': continue
@@ -209,9 +220,7 @@ def playstation_layout(flyt):
     changed = 0
     for i, block in enumerate(sections):
         if block[:4] == b'fnl1': sections[i] = bytearray(b'fnl1' + struct.pack('<I', 8 + len(font_data)) + font_data)
-        if block[:4] != b'txt1': continue
-        name = block[12:36].split(b'\0')[0].decode()
-        if name not in ('T_A_00', 'T_B_00', 'T_X_00', 'T_Y_00'): continue
+        if section_offsets[i] not in label_offsets: continue
         text = struct.unpack_from('<I', block, 0x64)[0]
         cp = struct.unpack_from('<H', block, text)[0]
         if cp not in labels: raise ValueError('unexpected action-guide label')

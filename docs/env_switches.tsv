@@ -10,12 +10,19 @@ DM_AUDIO	switch	`1` plays audio through Core Audio, `0` uses the silent sink; re
 DM_AUDIO_DUMP	diagnostic	`=<file>` writes every PCM block the game appends as is (16-bit, 48 kHz, channel count as in the OpenAudioOut log), to judge whether a sound played
 DM_AUDIO_MUTE	switch	`=1` runs the real Core Audio output path (callback pacing, background take-over) with the output silenced, for lifecycle tests on the Mac without noise
 DM_AUDREN_TRACE	diagnostic	When set, the CPU audio renderer logs every update with the number of frames rendered since the previous one
+DM_AUTO_MIN_HEIGHT	player	Minimum internal render height for automatic quality; rounded up to a supported 5% scale step and never below half the base height.
+DM_AUTO_QUALITY	player	1 enables opt-in live GPU-feedback quality control on builds with runtime tuning; 0 keeps manual settings. A requested FPS target is not a performance guarantee.
+DM_AUTO_TEXTURE	player	1 permits automatic quality to reduce sampler quality after reaching the resolution floor; off by default.
+DM_AUTO_VIEW	player	1 permits automatic quality to reduce the build-gated camera far clip after reaching the resolution floor; off by default. Does not change actor traversal or terrain LOD.
+DM_AUTO_VIEW_FLOOR	player	Smallest camera far-clip value automatic quality may request (500..25000; default 2000).
 DM_BC_ASTC	diagnostic	1 (default): convert BC1/2/3/7 to ASTC and unsigned BC6H to RG11B10F; 0 uses uncompressed outputs.
 DM_BC_CACHE	player	on (default), off, or a directory: integrity-checked persistent ASTC conversion cache; bounded asynchronous writes.
 DM_BC_SOFT	diagnostic	Force BC software conversion (1) or native BC (0); default follows the device capability.
 DM_BC_WORKERS	player	1..4 conversion participants, default 2; small mip levels remain serial.
 DM_BOOTPROF	diagnostic	When set, logs boot timing: the loader's breakdown (mapping, relocation, probes), Metal library loading, pipeline creation, texture uploads and the first present
 DM_BUNDLE_ID	switch	Overrides the iOS app's bundle ID in `build_ipa.sh` (default `org.nxnative.<title ID in lowercase>`)
+DM_CONTROLLER_ICONS	player	original (default), auto, xbox or playstation selects generated BOTW 1.9.0 in-game button prompts at next launch; unsupported controllers or missing assets keep original prompts.
+DM_CONTROLLER_MODS_ROOT	path	Read-only generated controller overlay selected by the iOS front end; explicit RomFS mods take priority and saves are never redirected.
 DM_COPY_GAME_RESOURCES	switch	`NO` skips the Xcode build phase that copies the game's resources into the app (`stage_resources.sh`, on by default); `build_ipa.sh` sets it for its unsigned build, which packs them itself
 DM_COPY_ROMFS	switch	`NO` keeps the game files out of the app, in the Xcode build phase (`stage_resources.sh`) and in the unsigned IPA of `build_ipa.sh` (on by default): `main.m` takes the validated `Documents/romfs.img` copied by `scripts/push_romfs.sh`, then a `Documents/romfs` folder; the build writes the image's identity as `romfs.id` into the app, and `main.m` uses only a matching image (`--romfs separate` of the NSP script sets this)
 DM_CTL	diagnostic	`=<file>` (Mac): the host polls the file every 100 ms and runs each appended line: button presses, `shot`, `passdump`, `texdump`, `env KEY=VALUE`, `peek`, `memdump`, `drag` and more
@@ -237,6 +244,7 @@ DM_PSO_WAITLOG	diagnostic	`=1` logs each draw that waited more than 20 ms for it
 DM_QOS_EDGES	switch	`=e1,e2`: the Switch priority edges of `DM_QOS_MAP` (default `44,59`)
 DM_QOS_MAP	switch	`=1` maps guest thread priority to QoS class: ≤ 44 user-interactive, 45–59 user-initiated, the rest utility (off by default: every guest thread runs user-interactive)
 DM_REGIONS	diagnostic	`=<file>` writes the table of the SDK's address regions every 2 s (alias offset, size, where the request returns to in the game, bytes mapped, the part opened, the SDK offset the request came through; `hle_svc.c` "Address regions"); the NSP script's address region check sets it
+DM_RENDER_FIXED	player	1 forces full scale even at 1.0 on guest builds with the full-scale flag; 0 preserves native dynamic resolution at 1.0. Automatic quality sets the flag while active.
 DM_RENDER_SCALE	player	`0.5` to `1.0`: fixes the game's 3D views at that fraction of their size and turns its dynamic resolution off, for builds with a render scale stub; `1.0` (the default) keeps it
 DM_RESOURCE_AOC	path	The add-on content folder the iOS build copies into the app's `aoc/` (empty for none); written by `gen_resources.py`, read by `stage_resources.sh`
 DM_RESOURCE_BUILD	switch	Package version (for example `v327680`), written to `Gen/resources.env` by `gen_resources.py`; with `DM_COPY_ROMFS=NO` the copy phase puts it in the `build=` field of the app's `romfs.id`
@@ -250,6 +258,7 @@ DM_RESOURCE_TITLE	switch	Game profile title ID, written to `Gen/resources.env` b
 DM_RESOURCE_VERSION	switch	Display version, written to `Gen/resources.env` by `gen_resources.py`; with `DM_COPY_ROMFS=NO` the copy phase puts it in the `version=` field of the app's `romfs.id`
 DM_RES_CHECK	diagnostic	`=1` prints the first 40 textures or buffers a shader reaches through its argument block that are not in the residency set (textures attributed to their parent allocation)
 DM_ROMFS	path	The game's RomFS folder, mounted read-only as `rom` (default `$DM_ROOT/romfs`); the Mac launcher, the iOS app and the NSP script set it
+DM_ROMFS_MODS	path	Colon-separated read-only RomFS overlay folders, before DM_ROMFS_OVERLAY and generated controller prompts; symbolic links, special files and path traversal are rejected.
 DM_ROMFS_OVERLAY	path	`=<dir>[:<dir>…]`: RomFS reads look in these folders first, in order, and fall back to `DM_ROMFS` (for a modified copy of some files)
 DM_ROOT	path	Workspace root (default `~/dm-work`): the host's and tools' default paths (RomFS, temporary storage, shader libraries under `build/cache/metal_shader_cache`, probe dumps) are under it
 DM_RT	diagnostic	`0` leaves the thread that acquires the window on its QoS only, with no Mach time-constraint policy declaring the frame deadline (on by default; for power A/B)
@@ -294,6 +303,7 @@ DM_TEST_SWKBD_LAG_MS	diagnostic	`=<ms>` sleeps that long between the keyboard ha
 DM_TEST_TRANSFORM_FEEDBACK	test	Path to the native t_transform_feedback executable used by the Python feedback tests
 DM_TEST_UP_LEAK	diagnostic	`=1` keeps the old upload staging block instead of retiring it, as before the fix, to measure the leak
 DM_TEST_UP_LOST	diagnostic	`=<batch index>` treats that batch of uploads as dropped, to exercise the re-upload path
+DM_TEXTURE_DETAIL	player	NVN sampler quality: 0 original (default), 1 caps anisotropy at 2x, 2 caps it at 1x and raises the mip floor to 1 for eligible mipmapped samplers. Does not resize or free texture allocations.
 DM_THERMAL_CAP	switch	`0` turns off the thermal cap, which holds the frame step at 30 fps while iOS reports a serious or critical thermal state (on by default)
 DM_THR	diagnostic	`=1` logs each SVC (except `SleepThread`) with its first four arguments, and each `CreateThread` with entry, stack, priority and core
 DM_THRCPU	diagnostic	`=<tsv path>[,<seconds>]` writes each thread's CPU time (100% = one core) and the total every interval (default 10 s); on iOS a relative path is under `Documents`
@@ -301,6 +311,7 @@ DM_TOUCH_HAPTICS	player	`0` turns off the light haptic tap when a touch control 
 DM_TOUCH_LOG	diagnostic	`=1` logs each touch-screen read with touch points (sample, finger, position, attributes) and each gesture entry, up to 500 lines
 DM_UDC_SELFTEST	diagnostic	`=1` runs a start-up check of DontCare load and store on private depth-stencil and RGBA8 textures (clear, Load + DontCare, read back) and logs one result line
 DM_UE_SHADERS	path	Folder of the Unreal shader code archives decoded by `uepak.py`, for `shader_split.py` (default `ue_shaders` beside the RomFS); needed when the RomFS has Unreal paks
+DM_VIEW_DISTANCE	player	Build-gated camera far clip: 0 original (default), or 500..25000. Clips distant geometry; does not reduce actor traversal or terrain LOD.
 DM_VK_CAPTURE	path	`=<dir>` (Mac) writes every SPIR-V module the game creates to `<dir>/<key>.spv`; the NSP script's Vulkan shader capture stage sets it
 DM_VK_LOG	diagnostic	`=1` logs Vulkan object creation in the Vulkan-on-Metal layer
 DM_VSYNC_HZ	switch	`=<Hz>`: rate at which a host thread fires the vi vsync event when the display link does not drive it (default 60)

@@ -71,6 +71,11 @@ static DmRootVC *g_root;
 static void launcher_done(void) { [g_root startGame]; }
 @implementation DmRootVC
 - (void)showGameSettings {
+    if (!dm_tuning_active()) {
+        UIAlertController *notice = [UIAlertController alertControllerWithTitle:@"Game is starting" message:@"Open graphics controls once the first game image appears." preferredStyle:UIAlertControllerStyleAlert];
+        [notice addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:notice animated:YES completion:nil]; return;
+    }
     void dm_show_tuning(UIViewController *, void (^)(void));
     __weak DmRootVC *root = self;
     dm_show_tuning(self, ^{ [root.game setNeedsLayout]; });

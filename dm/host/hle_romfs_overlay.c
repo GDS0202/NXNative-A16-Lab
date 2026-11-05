@@ -22,6 +22,20 @@ static int under(const char *root, const char *relative) {
     if (fstat(fd, &st) || !S_ISREG(st.st_mode)) { close(fd); return -1; }
     return fd;
 }
+static int under_list(const char *roots, const char *relative) {
+    if (!roots) return -1;
+    for (const char *part = roots; *part;) {
+        const char *end = strchr(part, ':');
+        size_t n = end ? (size_t)(end - part) : strlen(part);
+        if (n && n < 2049) {
+            char root[2049]; memcpy(root, part, n); root[n] = 0;
+            int fd = under(root, relative); if (fd >= 0) return fd;
+        }
+        if (!end) break;
+        part = end + 1;
+    }
+    return -1;
+}
 int dm_romfs_overlay_candidate(const char *relative) {
     if (!relative) return 0;
     if (getenv("DM_ROMFS_MODS") || getenv("DM_ROMFS_OVERLAY")) return 1;
@@ -31,7 +45,7 @@ int dm_romfs_overlay_candidate(const char *relative) {
 int dm_romfs_overlay_open(const char *relative) {
     if (!dm_romfs_overlay_candidate(relative)) return -1;
     // Explicit user mods take priority; automatic controller assets are separate.
-    int fd = under(getenv("DM_ROMFS_MODS"), relative);
-    if (fd < 0) fd = under(getenv("DM_ROMFS_OVERLAY"), relative);
+    int fd = under_list(getenv("DM_ROMFS_MODS"), relative);
+    if (fd < 0) fd = under_list(getenv("DM_ROMFS_OVERLAY"), relative);
     return fd >= 0 ? fd : under(getenv("DM_CONTROLLER_MODS_ROOT"), relative);
 }

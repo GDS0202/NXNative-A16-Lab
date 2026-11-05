@@ -111,6 +111,17 @@ class ControllerIcons(unittest.TestCase):
             with self.assertRaises(ValueError): icons.generate(root, output, icons.BUILD)
             self.assertEqual((output / 'mine').read_text(), 'keep')
 
+    def test_playstation_uses_pane_roles_instead_of_part_specific_names(self):
+        original = flyt().replace(b'T_B_00', b'T_B_01').replace(b'T_Y_00', b'T_Y_01').replace(b'T_X_00', b'T_X_01')
+        changed = icons.playstation_layout(original)
+        labels = []
+        for magic, k, name, _ in icons.layout.flyt_panes(changed):
+            if magic != 'txt1': continue
+            text = k + struct.unpack_from('<I', changed, k + 0x64)[0]
+            if name == 'T_GuideA_01': self.assertEqual(changed[text:text + 10], 'Open\0'.encode('utf-16-le'))
+            else: labels.append(struct.unpack_from('<H', changed, text)[0])
+        self.assertEqual(set(labels), {0xe041, 0xe042, 0xe043})
+
     def test_full_synthetic_pack_generates_both_controller_styles(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d); source = root / 'romfs'; (source / 'Font').mkdir(parents=True); (source / 'Pack').mkdir()
