@@ -3810,7 +3810,9 @@ static void pso_recent_schedule(void) {
     if (!g_recent_q || atomic_exchange(&g_recent_scheduled, 1)) return;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * (int64_t)NSEC_PER_SEC), g_recent_q, ^{ @autoreleasepool {
         pthread_mutex_lock(&g_recent_mu);
-        NSArray *hashes = g_pso_recent.array; atomic_store(&g_recent_dirty, 0);
+        // NSOrderedSet's array can be a live proxy. Take independent storage
+        // before a producer mutates the set after this lock is released.
+        NSArray *hashes = [g_pso_recent.array mutableCopy]; atomic_store(&g_recent_dirty, 0);
         pthread_mutex_unlock(&g_recent_mu);
         [[hashes componentsJoinedByString:@"\n"] writeToFile:g_recent_path atomically:YES encoding:NSUTF8StringEncoding error:nil];
         atomic_store(&g_recent_scheduled, 0);
@@ -6397,7 +6399,7 @@ static NSArray<WarmTask *> *warm_parse(NSArray<NSString *> *paths, long *lines) 
         int learned = [path isEqualToString:pso_user_path()];
         const char *le = getenv("DM_PSO_USER_WARM_LIMIT"); int limit = le ? MAX(0, MIN(2048, atoi(le))) : 1024;
         pso_recent_init();
-        pthread_mutex_lock(&g_recent_mu); NSArray *recent = g_pso_recent.array; pthread_mutex_unlock(&g_recent_mu);
+        pthread_mutex_lock(&g_recent_mu); NSArray *recent = [g_pso_recent.array mutableCopy]; pthread_mutex_unlock(&g_recent_mu);
         NSArray<NSString *> *records = learned ? nvn_warm_ranked(txt, recent, (NSUInteger)limit) : [txt componentsSeparatedByString:@"\n"];
         if (learned) MLOG("pipeline prewarm: selected at most %d records, recent runtime misses first (%lu selected; %lu recency hashes)", limit, (unsigned long)records.count, (unsigned long)recent.count);
         for (NSString *line in records) {
