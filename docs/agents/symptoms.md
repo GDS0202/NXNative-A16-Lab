@@ -120,6 +120,7 @@ One line per symptom in the [subsystem references](../reference/): what you see 
 
 ## Services and SDK calls
 
+- a two-character bumper label shows its first letter and only part of the second, while the action-guide diamond already works. → [Generated controller glyphs cropped in menus](../reference/services.md#generated-controller-glyphs-cropped-in-menus)
 - `sm::Initialize` aborts right after `ConnectToNamedPort` (SVC 0x1F) and `SendSyncRequest` (0x21); abort inside `nn::sm::Initialize`, the log showing `SVC 0x1f` (ConnectToNamedPort, port name `sm:`) and `SVC 0x21` answered by placeholders, then an `nn::diag` abort; abort with no message at start-up in a service call the host has no hook for (`Break` from `sdk+…` with an `nn::diag` backtrace). → [SDK calls that open a system service through sm](../reference/services.md#sdk-calls-that-open-a-system-service-through-sm)
 - a game update aborts at boot where the base game ran. → [A game update imports SDK calls the base game did not](../reference/services.md#a-game-update-imports-sdk-calls-the-base-game-did-not)
 - abort in `sm::Initialize` under `sf::hipc::InitializeHipcServiceResolution`, right after the first frames (from `main+0x5b8198`). → [Game-linked HIPC clients of system services](../reference/services.md#game-linked-hipc-clients-of-system-services)
@@ -266,6 +267,7 @@ One line per symptom in the [subsystem references](../reference/): what you see 
 
 ## Frame rate
 
+- `frame step cap 60` changes to 30 after `critical memory pressure from the system`, even with `DM_FPS_HOLD=off`, and never recovers. → [Memory pressure cap recovery](../reference/frame-rate.md#memory-pressure-cap-recovery)
 - clang reports division by zero in `fstep_tick` (`hle_nvn.c`). → [Frame cap checked and used from the same sample](../reference/frame-rate.md#frame-cap-checked-and-used-from-the-same-sample)
 - a 30 fps game to run at 60; after the floor was lowered, slow motion on a GPU-bound device (GitHub issue #9). → [sead's dynamic present interval, `ksys::VFR` and the host's frame step](../reference/frame-rate.md#seads-dynamic-present-interval-ksysvfr-and-the-hosts-frame-step)
 - on an iPhone, a game with the frame step at 60 fps drops a frame in most windows after a few minutes, and its GPU time per frame roughly doubles to triples (17-26 ms for the same scenes). → [A thermally serious iPhone holds 30 fps](../reference/frame-rate.md#a-thermally-serious-iphone-holds-30-fps)
@@ -358,6 +360,7 @@ One line per symptom in the [subsystem references](../reference/): what you see 
 
 ## Rendering
 
+- a character becomes dark or incorrect after selecting non-original texture filtering, possibly while automatic texture quality is enabled. → [Texture quality must preserve data sampler LOD](../reference/rendering.md#texture-quality-must-preserve-data-sampler-lod)
 - clang reports null dereferences in `nvnWindowInitialize` and `clear_tex`; clearing a null texture crashes with `DM_NVN_PASSDUMP=1`. → [Null textures in diagnostic logs](../reference/rendering.md#null-textures-in-diagnostic-logs)
 - Metal aborts on a texture descriptor with an absurd size (`height (1869367126) greater than … 16384`). → [Texture objects copied into command records](../reference/rendering.md#texture-objects-copied-into-command-records)
 - a decoded movie stays black even though its YUV textures contain the picture; disabling its depth test makes it visible. → [New textures start as zero](../reference/rendering.md#new-textures-start-as-zero)
@@ -466,6 +469,7 @@ One line per symptom in the [subsystem references](../reference/): what you see 
 
 ## Shaders
 
+- long frames report pipeline/library creation time even when the timing summary shows zero newly compiled bases and successful archive lookups. → [Fragmented pipeline archive hits can stall](../reference/shaders.md#fragmented-pipeline-archive-hits-can-stall)
 - the shader split finds no game programs despite loose `.fx.phyre` effects and multi-GB `.vbf` archives. → [Phyre NVN effects in Virtuos VBF archives](../reference/shaders.md#phyre-nvn-effects-in-virtuos-vbf-archives)
 - the shader split stops on one archive with a Python traceback (an `IndexError` or `struct.error` naming no file), or a reader's `[RED]` line about a format it does not know, and nothing is written; the NSP script loses the build at the split. → [A file no reader reads](../reference/shaders.md#a-file-no-reader-reads)
 - `shader_split.py` finds 0 shaders in a RomFS of zstd files named `.zst`. → [Zstd files recognised by their magic](../reference/shaders.md#zstd-files-recognised-by-their-magic)

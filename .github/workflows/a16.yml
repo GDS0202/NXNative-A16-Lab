@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 12
+          fetch-depth: 0 # The fixed historical component/impact baseline must remain reachable as the branch grows.
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.14'
@@ -31,6 +31,12 @@ jobs:
       - run: python -m pip install texture2ddecoder Pillow unicorn
       - name: Live quality controller and executable AArch64 guest fixtures
         run: |
+          clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_memory.c -o /tmp/memory
+          /tmp/memory
+          clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_sampler_quality.c -lm -o /tmp/sampler-quality
+          /tmp/sampler-quality
+          clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_archive_route.c -o /tmp/archive-route
+          /tmp/archive-route
           clang -O1 -g -Wall -Wextra -Werror -pthread -fsanitize=address,undefined dm/gfx/tests/t_tuning.c dm/gfx/nvn/nvn_tuning.c -lm -o /tmp/tuning
           /tmp/tuning
           clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_romfs_overlay.c dm/host/hle_romfs_overlay.c -o /tmp/overlay
@@ -64,7 +70,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 12
+          fetch-depth: 0
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'

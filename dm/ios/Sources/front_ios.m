@@ -7,6 +7,10 @@
 #import <Metal/Metal.h>
 #import <AVFAudio/AVFAudio.h>
 int dm_mem_guard(void);   // nvn_mtl.m: the memory guard level, shown in the HUD
+int dm_mem_guard_pressure(void);
+const char *dm_mem_guard_reason(void);
+int mtl_fps_target(void);
+int nvn_frame_cap_reasons(void);
 #include <errno.h>
 #include "front.h"
 #include "nvn_frame_metrics.h"
@@ -171,9 +175,14 @@ static void front_ios_trace_watch(void) {
         [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *timer) {
             (void)timer; uint64_t left = os_proc_available_memory();
             dm_tuning_system(left, dm_thermal_now(), dm_low_power_now());
+            int cap = mtl_fps_target(), reasons = nvn_frame_cap_reasons();
+            dm_tuning_limits(cap, reasons, dm_mem_guard(), dm_mem_guard_pressure());
             if (nvn_stutter_enabled()) { task_vm_info_data_t vi = {0}; mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
                 task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vi, &count);
-                nvn_stutter_system(now_ns(), vi.phys_footprint, left, dm_thermal_now(), dm_low_power_now()); }
+                uint64_t now = now_ns();
+                nvn_stutter_system(now, vi.phys_footprint, left, dm_thermal_now(), dm_low_power_now());
+                dm_tuning_snapshot tuning = dm_tuning_read();
+                nvn_stutter_policy(now, tuning.requested.target, cap, reasons, tuning.scale, tuning.texture, tuning.far_clip); }
         }];
 
 }
@@ -219,9 +228,9 @@ static UILabel *front_ios_fps_label(void) {
                 nvn_frame_metrics fm = nvn_frame_metrics_snapshot();
                 nvn_bc_cache_info bc = nvn_bc_cache_stats();
                 int mg = dm_mem_guard();
-                l.text = [NSString stringWithFormat:@" %.0f real fps · GPU %@ · ≥50ms %u/%u\n p95 %.1f · p99 %.1f ms · thermal %d%@\n %.2f GB used · %.2f GB left · ASTC %llu/%llu · trace lost %llu ",
+                l.text = [NSString stringWithFormat:@" %.0f real fps · GPU %@ · ≥50ms %u/%u\n p95 %.1f · p99 %.1f ms · thermal %d%@\n %.2f GiB used · %.2f GiB headroom · ASTC %llu/%llu · trace lost %llu ",
                     fps, gpu >= 0 ? [NSString stringWithFormat:@"%.1f ms", gpu] : @"--", fm.stalls50, fm.samples,
-                    fm.p95_ms, fm.p99_ms, dm_thermal_now(), mg ? @" · GUARD 30" : @"", used, left,
+                    fm.p95_ms, fm.p99_ms, dm_thermal_now(), mg ? [NSString stringWithFormat:@" · MEM30 %s", dm_mem_guard_reason()] : @"", used, left,
                     (unsigned long long)bc.hits, (unsigned long long)(bc.hits + bc.misses), (unsigned long long)nvn_stutter_lost()];
                 l.textColor = left < 0.25 ? UIColor.systemRedColor : left < 0.5 ? UIColor.systemOrangeColor : UIColor.whiteColor;   // red: iOS is about to close the app
             }

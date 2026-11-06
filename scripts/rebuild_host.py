@@ -227,7 +227,8 @@ def build(args):
                DM_BUNDLE_ID=info['CFBundleIdentifier'], DM_DISPLAY_NAME=info.get('CFBundleDisplayName', 'NXNative Lab'),
                DM_APP_VERSION=info['CFBundleShortVersionString'], DM_APP_CATEGORY=profile.get('app_category'),
                DM_SHOW_FPS='YES' if info.get('DMShowFPS') else 'NO', DM_LANG=info.get('DMLanguage', 'en-US'),
-               DM_TEAM_ID='', DM_SCHEME_NAME='DmIOS', DM_APPICON='')
+               DM_TEAM_ID='', DM_SCHEME_NAME='DmIOS', DM_APPICON='', DM_SOURCE_REVISION=source,
+               DM_GAME_ID=game, DM_GAME_PACKAGE=package, DM_MAIN_BUILD_ID=wanted.get('main', 'not-recorded'))
     def run(*cmd, capture=False):
         return subprocess.run(list(map(str, cmd)), env=env, cwd=project, check=True, text=True,
                               stdout=subprocess.PIPE if capture else None).stdout
@@ -255,6 +256,7 @@ def build(args):
     shutil.copyfile(linked, executable); executable.chmod(0o755)
     info['NXNativeSourceRevision'] = source; info['NXNativeBuildChannel'] = 'experimental'
     info['NXNativeGameId'] = game; info['NXNativeGamePackage'] = package
+    info['NXNativeMainBuildId'] = wanted.get('main', 'not-recorded')
     (app / 'Info.plist').write_bytes(plistlib.dumps(info))
     shutil.rmtree(app / '_CodeSignature', ignore_errors=True)
     (app / 'embedded.mobileprovision').unlink(missing_ok=True)

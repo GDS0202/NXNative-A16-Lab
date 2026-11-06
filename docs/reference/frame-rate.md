@@ -1,5 +1,17 @@
 # Frame rate
 
+### Memory pressure cap recovery
+
+- **Follow-up:** the safe interval requires continuous observations; a timer gap over two seconds or a clock rollback resets recovery. Time spent suspended cannot release the cap immediately on foregrounding. `t_memory` covers this and 50,000 mixed pressure/headroom transitions. Automatic-quality evidence also resets on unknown GPU samples; a measurement interrupted by an automatic quality change is invalidated, just as for a manual change. Both current and rotated previous-session state journals are preserved on restart.
+
+- **Symptom:** `frame step cap 60` changes to 30 after `critical memory pressure from the system`, even with `DM_FPS_HOLD=off`, and never recovers.
+- **Cause:** process headroom is not the system pressure level. The old guard subscribed to WARN/CRITICAL without NORMAL, and required more than 1 GiB headroom for 15 seconds to recover. A steady workload could remain below that exit threshold indefinitely. It also ignored zero available bytes on iOS. Late-frame hold, movie/VFR policy, memory and thermal caps are separate mechanisms.
+- **Fix:** `nvn_memory.h` keeps OS pressure and headroom separate. Subscribe to NORMAL too; critical pressure or less than 300 MiB enters level 2; less than 600 MiB enters level 1. After OS normal, at least 768 MiB for 10 seconds releases the cap, with a lower intermediate level and renewed-pressure hysteresis. A healthy WARN pauses optional work without immediately forcing a new cap. Zero bytes is critical. Real continued pressure still holds 30. This is a policy correction, not proof that 60 is safe in every scene.
+- **Relief:** pause optional learned prewarm and cache writes. The submit owner may retire completed upload scratch idle for 120 submissions, and cold frame arenas above the retained scratch budget. Never discard guest storage, live textures, unfinished GPU allocations or private render-target history. Log malloc-returned bytes separately from retired allocation sizes; neither is a measured gameplay improvement. System samples record actual footprint/headroom.
+- **Diagnostics:** report explicit cap causes (target/movie/thermal/memory/fixed-step), raw OS event flags, policy state and recovery reason. `DM_LONGFRAME=1` opts into verbose scene logs; default recording stays off. Schema-2 traces rotate two 32 MiB segments and keep a separate bounded policy/memory journal. The analyzer rejects mixed sessions and marks windows whose beginning rotated out.
+- **Check:** portable ASan/UBSan policy replay covers critical events, recorded headroom ranges, NORMAL, zero bytes, interrupted recovery and clock rollback. Actual iOS pressure delivery, reclamation and recovered frame rate require a new device session.
+- **Found on:** [BOTW A16 diagnostics](../../dm/games/01007EF00011E000/README.md#a16-diagnostic-baseline-2026-11-06).
+
 Frame pacing: the host's frame step, engine frame limiters, present intervals and display rates. Each entry: symptom, cause, fix, the games it was found on. The [symptom index](../agents/symptoms.md) lists every symptom.
 
 ## Frame step

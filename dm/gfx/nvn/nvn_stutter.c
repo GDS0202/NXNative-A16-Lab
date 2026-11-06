@@ -14,14 +14,16 @@
 #include <pthread/qos.h>
 #endif
 #ifndef NVN_STUTTER_LIMIT
-#define NVN_STUTTER_LIMIT (64u << 20)
+#define NVN_STUTTER_LIMIT (32u << 20)
 #endif
+#define JOURNAL_LIMIT (512u << 10)
 #define CAPACITY 4096
 typedef struct {
-    enum { FRAME, PRESENT, SYSTEM, BOUNDARY } kind;
+    enum { FRAME, PRESENT, SYSTEM, BOUNDARY, MEMORY, POLICY } kind;
     nvn_stutter_sample frame;
     uint64_t ticket, footprint, headroom;
     int thermal, low_power;
+    int level, pressure, reason, target, cap, scale, texture, clip;
 } event;
 typedef struct { _Atomic uint64_t sequence; event value; } cell;
 static cell *queue;
@@ -37,8 +39,21 @@ static _Atomic unsigned producers;
 static _Atomic int stopping;
 static int started;
 static FILE *output;
+static FILE *journal;
+static unsigned segment;
+static _Atomic uint64_t session;
+static void header(FILE *file, unsigned index, int events) {
+    fprintf(file, "{\"kind\":\"header\",\"schema\":2,\"generated_fps\":0,\"session\":%" PRIu64 ",\"segment\":%u,\"events_only\":%s,\"limit_bytes\":%u,\"queue_capacity\":%u,\"identity_source\":\"capabilities.json\"}\n",
+            session, index, events ? "true" : "false", events ? JOURNAL_LIMIT : NVN_STUTTER_LIMIT, CAPACITY);
+}
+static FILE *open_file(const char *path) {
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
+    FILE *file = fd >= 0 ? fdopen(fd, "w") : NULL;
+    if (!file && fd >= 0) close(fd);
+    return file;
+}
 static double number(double n) { return isfinite(n) && n >= -1 && n <= 3600000 ? n : -1; }
-static void write_event(const event *e) {
+static void write_event(FILE *output, const event *e) {
     const nvn_stutter_sample *s = &e->frame;
     if (e->kind == FRAME) {
         fprintf(output, "{\"kind\":\"frame\",\"frame\":%" PRIu64 ",\"timestamp_ns\":%" PRIu64, s->frame, s->timestamp_ns);
@@ -55,6 +70,12 @@ static void write_event(const event *e) {
         fprintf(output, "{\"kind\":\"system\",\"timestamp_ns\":%" PRIu64 ",\"footprint_bytes\":%" PRIu64
                 ",\"headroom_bytes\":%" PRIu64 ",\"thermal\":%d,\"low_power\":%d}\n",
                 s->timestamp_ns, e->footprint, e->headroom, e->thermal, e->low_power);
+    } else if (e->kind == MEMORY) {
+        fprintf(output, "{\"kind\":\"memory\",\"timestamp_ns\":%" PRIu64 ",\"headroom_bytes\":%" PRIu64 ",\"level\":%d,\"os_pressure\":%d,\"reason\":%d,\"malloc_returned_bytes\":%" PRIu64 "}\n",
+                s->timestamp_ns, e->headroom, e->level, e->pressure, e->reason, e->footprint);
+    } else if (e->kind == POLICY) {
+        fprintf(output, "{\"kind\":\"policy\",\"timestamp_ns\":%" PRIu64 ",\"requested_fps\":%d,\"effective_cap\":%d,\"cap_reasons\":%d,\"scale_percent\":%d,\"texture_filter\":%d,\"far_clip\":%d}\n",
+                s->timestamp_ns, e->target, e->cap, e->reason, e->scale, e->texture, e->clip);
     } else fprintf(output, "{\"kind\":\"boundary\",\"timestamp_ns\":%" PRIu64 "}\n", s->timestamp_ns);
 }
 static void *writer(void *unused) {
@@ -62,8 +83,8 @@ static void *writer(void *unused) {
 #ifdef __APPLE__
     pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
 #endif
-    // Space for a final status is reserved before each record. A capped or
-    // lossy trace is explicitly invalid for an A/B performance certification.
+    // Rotation belongs to the utility writer, never a producer. Retain a
+    // bounded recent window instead of disabling diagnostics mid-session.
     for (;;) {
         event batch[32]; unsigned n = 0;
         while (n < 32) {
@@ -80,18 +101,33 @@ static void *writer(void *unused) {
         }
         for (unsigned i = 0; i < n; i++) {
             long at = ftell(output);
-            if (at < 0 || (uint64_t)at + 2048 >= NVN_STUTTER_LIMIT) {
-                fprintf(output, "{\"kind\":\"status\",\"capped\":true,\"lost\":%" PRIu64 "}\n", atomic_load(&lost));
-                atomic_store(&mode, 0); goto finish;
+            if (at < 0) { atomic_store(&mode, 0); goto finish; }
+            if ((uint64_t)at + 2048 >= NVN_STUTTER_LIMIT) {
+                fprintf(output, "{\"kind\":\"status\",\"capped\":false,\"rotated\":true,\"lost\":%" PRIu64 "}\n", atomic_load(&lost));
+                int bad = fclose(output); output = NULL;
+                if (bad || rename("stutter.jsonl", "stutter.1.jsonl") || !(output = open_file("stutter.jsonl"))) { atomic_store(&mode, 0); goto finish; }
+                header(output, ++segment, 0);
             }
-            write_event(&batch[i]);
+            write_event(output, &batch[i]);
+            if (journal && (batch[i].kind == MEMORY || batch[i].kind == POLICY || batch[i].kind == BOUNDARY)) {
+                long pos = ftell(journal);
+                if (pos < 0 || (uint64_t)pos + 2048 >= JOURNAL_LIMIT) {
+                    fclose(journal); journal = NULL;
+                    if (!rename("performance-events.jsonl", "performance-events.1.jsonl")) journal = open_file("performance-events.jsonl");
+                    if (journal) header(journal, segment, 1);
+                }
+                if (journal) { write_event(journal, &batch[i]); if (fflush(journal)) { fclose(journal); journal = NULL; } }
+            }
         }
         fprintf(output, "{\"kind\":\"status\",\"capped\":false,\"lost\":%" PRIu64 "}\n", atomic_load(&lost));
         if (fflush(output) || ferror(output)) { atomic_store(&mode, 0); break; }
         if (done) break;
     }
 finish:
-    fclose(output); output = NULL;
+    if (output) fclose(output);
+    output = NULL;
+    if (journal) fclose(journal);
+    journal = NULL;
     return NULL;
 }
 static void initialize(void) {
@@ -100,12 +136,18 @@ static void initialize(void) {
     queue = calloc(CAPACITY, sizeof *queue);
     if (!queue) { atomic_store(&mode, 0); return; }
     for (unsigned i = 0; i < CAPACITY; i++) atomic_init(&queue[i].sequence, i);
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); session = (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec;
+    unlink("stutter.prev.1.jsonl"); rename("stutter.1.jsonl", "stutter.prev.1.jsonl");
     rename("stutter.jsonl", "stutter.prev.jsonl");
-    int fd = open("stutter.jsonl", O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
-    output = fd >= 0 ? fdopen(fd, "w") : NULL;
-    if (!output) { if (fd >= 0) close(fd); free(queue); queue = NULL; atomic_store(&mode, 0); return; }
-    fprintf(output, "{\"kind\":\"header\",\"schema\":1,\"generated_fps\":0,\"limit_bytes\":%u,\"queue_capacity\":%u}\n", NVN_STUTTER_LIMIT, CAPACITY);
+    unlink("performance-events.prev.1.jsonl"); rename("performance-events.1.jsonl", "performance-events.prev.1.jsonl");
+    rename("performance-events.jsonl", "performance-events.prev.jsonl");
+    output = open_file("stutter.jsonl");
+    if (!output) { free(queue); queue = NULL; atomic_store(&mode, 0); return; }
+    header(output, 0, 0);
+    journal = open_file("performance-events.jsonl"); if (journal) header(journal, 0, 1);
     if (pthread_create(&thread, NULL, writer, NULL)) {
+        if (journal) fclose(journal);
+        journal = NULL;
         fclose(output); output = NULL; free(queue); queue = NULL; atomic_store(&mode, 0); return;
     }
     started = 1; atomic_store(&mode, 1); atexit(nvn_stutter_stop);
@@ -145,6 +187,15 @@ void nvn_stutter_system(uint64_t ns, uint64_t footprint, uint64_t headroom, int 
     event e = {.kind = SYSTEM, .frame = {.timestamp_ns = ns}, .footprint = footprint, .headroom = headroom, .thermal = thermal, .low_power = low_power}; push(&e);
 }
 void nvn_stutter_boundary(uint64_t ns) { if (!ns) return; event e = {.kind = BOUNDARY, .frame = {.timestamp_ns = ns}}; push(&e); }
+void nvn_stutter_memory(uint64_t ns, uint64_t left, int level, int pressure, int reason, uint64_t returned) {
+    if (!ns || !nvn_stutter_enabled()) return;
+    event e = {.kind = MEMORY, .frame = {.timestamp_ns = ns}, .headroom = left, .level = level, .pressure = pressure, .reason = reason, .footprint = returned}; push(&e);
+}
+void nvn_stutter_policy(uint64_t ns, int target, int cap, int reasons, int scale, int texture, int clip) {
+    if (!ns || !nvn_stutter_enabled()) return;
+    event e = {.kind = POLICY, .frame = {.timestamp_ns = ns}, .target = target, .cap = cap, .reason = reasons, .scale = scale, .texture = texture, .clip = clip}; push(&e);
+}
+uint64_t nvn_stutter_session(void) { return session; } // initialized before the trace's producers start
 uint64_t nvn_stutter_lost(void) { return atomic_load(&lost); }
 void nvn_stutter_stop(void) {
     if (!started) return;

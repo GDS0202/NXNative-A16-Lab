@@ -159,6 +159,50 @@ def mask(symbol, size):
                              for sy in range(4) for sx in range(4)) / 16) for y in range(size) for x in range(size)]
 
 
+def glyph_width(font, index):
+    """CWDH glyphWidth limits sampled atlas columns; left bearing is not a UV offset."""
+    at = struct.unpack_from('<H', font, 6)[0]
+    # Real FFNTs may store CWDH after TGLP's embedded BNTX payload. Walk the
+    # declared sections, not just the prefix before the first sheet.
+    count = struct.unpack_from('<H', font, 0x10)[0]
+    if not 1 <= count <= 4096: raise ValueError('font section count')
+    for _ in range(count):
+        if at + 8 > len(font): raise ValueError('font block header bounds')
+        size = struct.unpack_from('<I', font, at + 4)[0]
+        if size < 8 or at + size > len(font): raise ValueError('font block bounds')
+        if font[at:at + 4] == b'CWDH':
+            if size < 16: raise ValueError('font width block header')
+            first, last = struct.unpack_from('<HH', font, at + 8)
+            if first > last or 16 + 3 * (last - first + 1) > size: raise ValueError('font width table bounds')
+            if first <= index <= last:
+                _, width, advance = struct.unpack_from('<bBB', font, at + 16 + 3 * (index - first))
+                if not 4 <= width <= 50 or not advance: raise ValueError('unsupported glyph width')
+                return width
+        at += size
+    raise ValueError('glyph has no CWDH width; refusing to guess its visible area')
+
+
+def font_mask(symbol, width):
+    """Fit the entire own symbol into its sampled width, preserving aspect ratio."""
+    pixels = mask(symbol, 50)
+    points = [(i % 50, i // 50) for i, value in enumerate(pixels) if value]
+    if not points: raise ValueError('empty controller symbol')
+    x0, y0 = min(p[0] for p in points), min(p[1] for p in points)
+    w = max(p[0] for p in points) - x0 + 1; h = max(p[1] for p in points) - y0 + 1
+    scale = min(1, (width - 2) / w, 48 / h)
+    left, top = (width - w * scale) / 2, (50 - h * scale) / 2
+    out = [0] * 2500
+    for y in range(50):
+        for x in range(width):
+            total = 0
+            for sy in range(4):
+                for sx in range(4):
+                    u, v = (x + (sx + .5) / 4 - left) / scale, (y + (sy + .5) / 4 - top) / scale
+                    if 0 <= u < w and 0 <= v < h: total += pixels[(y0 + int(v)) * 50 + x0 + int(u)]
+            out[y * 50 + x] = round(total / 16)
+    return out
+
+
 def font_icons(font, style):
     table, lo, hi = layout.cmap_table(font)
     t = font.index(b'TGLP'); cw, ch, sheets = font[t + 8:t + 11]
@@ -176,7 +220,7 @@ def font_icons(font, style):
         if not lo <= cp <= hi: raise ValueError('glyph code point outside CMAP')
         index = struct.unpack_from('<H', font, table + 2 * (cp - lo))[0]
         if index >= columns * rows: raise ValueError('glyph index outside sheet')
-        pixels = mask(symbol, 50); ox, oy = (index % columns) * 51, (index // columns) * 51
+        pixels = font_mask(symbol, glyph_width(font, index)); ox, oy = (index % columns) * 51, (index // columns) * 51
         for y in range(50):
             for x in range(50): changes[(ox + x, height - 1 - oy - y)] = pixels[y * 50 + x]
     changed = paint(font[start:], textures[0], changes)
@@ -307,8 +351,8 @@ def generate(source, output, build_id):
             asset = guide_icons(packed, style)
             dest = root / style / 'Pack/Bootup.pack'; dest.parent.mkdir(parents=True, exist_ok=True); dest.write_bytes(asset)
             records.append({'path': 'Pack/Bootup.pack', 'sha256': hashlib.sha256(asset).hexdigest()})
-            (root / style / 'icons.json').write_text(json.dumps({'format': FORMAT, 'build_id': BUILD, 'style': style, 'mapping': 'physical-position', 'files': records}, indent=2) + '\n')
-        (root / 'generation.json').write_text(json.dumps({'format': FORMAT, 'build_id': BUILD}) + '\n')
+            (root / style / 'icons.json').write_text(json.dumps({'format': FORMAT, 'font_metrics_revision': 2, 'build_id': BUILD, 'style': style, 'mapping': 'physical-position', 'files': records}, indent=2) + '\n')
+        (root / 'generation.json').write_text(json.dumps({'format': FORMAT, 'font_metrics_revision': 2, 'build_id': BUILD}) + '\n')
         if output.exists(): shutil.rmtree(output)
         os.replace(root, output)
     return len(fonts)

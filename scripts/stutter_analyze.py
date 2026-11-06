@@ -49,19 +49,50 @@ def read_trace(path):
                 # complete trace and must not certify a comparison.
                 if line.endswith('\n'): raise ValueError('malformed complete trace record') from None
                 rows.append({'kind': 'status', 'lost': 1, 'capped': False}); break
-            if not isinstance(row, dict) or row.get('kind') not in ('header', 'frame', 'present', 'system', 'boundary', 'status'):
+            if not isinstance(row, dict) or row.get('kind') not in ('header', 'frame', 'present', 'system', 'boundary', 'status', 'memory', 'policy'):
                 raise ValueError('unknown trace record')
-            if row['kind'] in ('frame', 'present', 'system', 'boundary'):
+            if row['kind'] in ('frame', 'present', 'system', 'boundary', 'memory', 'policy'):
                 ns = row.get('timestamp_ns')
                 if type(ns) is not int or ns <= 0: raise ValueError('invalid monotonic timestamp')
             for key, value in row.items():
                 if key.endswith('_ms') and (type(value) not in (int, float) or not math.isfinite(value)):
                     raise ValueError('invalid duration')
             rows.append(row)
-    if not rows or rows[0].get('schema') != 1 or rows[0].get('kind') != 'header':
+    if not rows or rows[0].get('schema') not in (1, 2) or rows[0].get('kind') != 'header':
         raise ValueError('unsupported trace schema')
     if rows[0].get('generated_fps') != 0:
         raise ValueError('this analyzer requires separate real-frame traces; generated frames cannot be counted as real')
+    if rows[0]['schema'] == 2: rows[0]['retained_window'] = rows[0].get('segment', 0) > 0
+    return rows
+
+
+def read_segments(path, previous=None, events=()):
+    paths = ([previous] if previous else []) + [path]
+    if len(events) > 2 or sum(p.stat().st_size for p in paths + list(events)) > MAX_BYTES + 2 * 1024**2:
+        raise ValueError('combined trace exceeds the reader limit')
+    traces = [read_trace(p) for p in paths]
+    if len(traces) == 1 and not events and traces[0][0]['schema'] == 1: return traces[0]
+    heads = [t[0] for t in traces]
+    if any(h.get('schema') != 2 or h.get('events_only') for h in heads):
+        raise ValueError('only full schema-2 segments can be joined')
+    session = heads[0].get('session')
+    if type(session) is not int or session <= 0 or any(h.get('session') != session for h in heads):
+        raise ValueError('segments belong to different sessions')
+    traces.sort(key=lambda t: t[0]['segment'])
+    indices = [t[0]['segment'] for t in traces]
+    if any(type(i) is not int or i < 0 for i in indices) or indices != list(range(indices[0], indices[0] + len(indices))):
+        raise ValueError('segments are duplicate or nonconsecutive')
+    header = dict(traces[0][0], retained_window=indices[0] > 0, segment_count=len(traces))
+    rows = [header] + [r for t in traces for r in t[1:]]
+    known = {(r['kind'], r['timestamp_ns']) for r in rows if r['kind'] in ('memory', 'policy', 'boundary')}
+    for p in events:
+        extra = read_trace(p)
+        if extra[0].get('session') != session or not extra[0].get('events_only'):
+            raise ValueError('event journal belongs to a different session or is not an event journal')
+        for r in extra[1:]:
+            if r['kind'] not in ('memory', 'policy', 'boundary'): raise ValueError('unexpected journal record')
+            key = (r['kind'], r['timestamp_ns'])
+            if key not in known: rows.append(r); known.add(key)
     return rows
 
 
@@ -84,7 +115,7 @@ def analyze(rows, start=0, seconds=None):
     tickets, seen = 0, set()
     previous = None
     for current in presents:
-        identity = (current['ticket'], current['timestamp_ns'])
+        identity = current['ticket']  # A repeated callback for one real frame is not another rendered frame.
         if identity in seen: continue
         seen.add(identity)
         if previous is not None:
@@ -116,14 +147,24 @@ def analyze(rows, start=0, seconds=None):
     relevant = [r for r in systems if chosen(r)]
     stats = [r for r in rows if r['kind'] == 'status']
     lost = max((r.get('lost', 0) for r in stats), default=0)
-    complete = bool(stats) and not lost and not any(r.get('capped') for r in stats)
+    retained = rows[0].get('retained_window', False)
+    complete = bool(stats) and not lost and not retained and not any(r.get('capped') for r in stats)
     observed = lambda key: [f[key] for f in frames.values() if isinstance(f.get(key), (float, int)) and f[key] >= 0]
     mean = lambda values: statistics.fmean(values) if values else None
     warnings = []
+    if retained: warnings.append('The oldest segments rotated out; statistics describe the retained window, not the whole session.')
     if not complete: warnings.append('Trace lost records, reached its cap, or has no flushed status; comparison cannot certify a gain.')
     if len(intervals) < 1000: warnings.append('Fewer than 1000 displayed intervals: 0.1% low has a very small tail.')
     warnings.append('CPU/process counters and asynchronous work can overlap; correlated evidence does not prove a root cause.')
-    return {'schema': 1, 'complete': complete, 'lost_records': lost,
+    transitions = [{**r, 'at_seconds': (r['timestamp_ns'] - origin) / 1e9} for r in rows if r['kind'] in ('memory', 'policy') and chosen(r)]
+    memory_events = sorted((r for r in transitions if r['kind'] == 'memory'), key=lambda r: r['timestamp_ns'])
+    policies = sorted((r for r in transitions if r['kind'] == 'policy'), key=lambda r: r['timestamp_ns'])
+    changes, previous_policy = [], None
+    for r in policies:
+        key = tuple(r.get(k) for k in ('requested_fps', 'effective_cap', 'cap_reasons', 'scale_percent', 'texture_filter', 'far_clip'))
+        if key != previous_policy: changes.append(r); previous_policy = key
+    return {'schema': 2, 'complete': complete, 'retained_window': retained, 'lost_records': lost,
+            'duration_seconds': sum(intervals) / 1000, 'memory_events': memory_events, 'policy_changes': changes,
             'displayed_real_frames': summarize(intervals),
             'guest_produced_intervals': summarize(observed('frame_ms')),
             'generated_fps': 0, 'unpresented_ticket_gaps': tickets,
@@ -142,13 +183,15 @@ def analyze(rows, start=0, seconds=None):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('trace', type=Path); ap.add_argument('--compare', type=Path)
+    ap.add_argument('--previous-segment', type=Path, help='Matching stutter.1.jsonl from the same session')
+    ap.add_argument('--events', type=Path, action='append', default=[], help='Matching performance-events[.1].jsonl; at most two')
     ap.add_argument('--start', type=float, default=0, help='Seconds after the first actual presentation')
     ap.add_argument('--seconds', type=float); ap.add_argument('--json', type=Path)
     args = ap.parse_args()
     try:
         if not math.isfinite(args.start) or args.start < 0 or (args.seconds is not None and (not math.isfinite(args.seconds) or args.seconds <= 0)):
             raise ValueError('use a nonnegative start and positive duration')
-        result = analyze(read_trace(args.trace), args.start, args.seconds)
+        result = analyze(read_segments(args.trace, args.previous_segment, args.events), args.start, args.seconds)
         if args.compare:
             baseline = analyze(read_trace(args.compare), args.start, args.seconds)
             if not result['complete'] or not baseline['complete']: raise ValueError('A/B certification requires two complete traces')

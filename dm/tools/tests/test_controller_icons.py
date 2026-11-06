@@ -40,8 +40,10 @@ def font():
     table = struct.pack(f'<{hi-lo+1}H', *range(hi-lo+1)); table += bytes(-len(table) % 4)
     cmap = b'CMAP' + struct.pack('<IIIHHI', 24 + len(table), lo, hi, 1, 0, 0) + table
     tglp = b'TGLP' + struct.pack('<I4BI6HI', 32, 50, 50, 1, 48, 131072, 48, 0, 5, 20, 256, 1024, 0x1000)
-    head = b'FFNT\xfe\xff' + struct.pack('<HIIHH', 0x14, 0x04010000, 0, 2, 0)
-    data = head + tglp + cmap
+    head = b'FFNT\xfe\xff' + struct.pack('<HIIHH', 0x14, 0x04010000, 0, 3, 0)
+    metrics = b''.join(struct.pack('<bBB', 3, 31 if i in (4, 5) else 30, 36) for i in range(hi-lo+1))
+    widths = b'CWDH' + struct.pack('<IHHI', 16 + len(metrics) + (-len(metrics) % 4), 0, hi-lo, 0) + metrics + bytes(-len(metrics) % 4)
+    data = head + tglp + cmap + widths
     return data + bytes(0x1000 - len(data)) + bntx()
 
 
@@ -69,6 +71,20 @@ def flyt():
 
 
 class ControllerIcons(unittest.TestCase):
+    def test_bumper_glyphs_fit_the_actual_cwdh_sampled_width(self):
+        original = font(); self.assertEqual(icons.glyph_width(original, 4), 31)
+        for symbol in ('LB', 'RB', 'L1', 'R1', 'LT', 'RT', 'L2', 'R2', 'circle', 'triangle', 'square', 'cross'):
+            pixels = icons.font_mask(symbol, 31)
+            self.assertTrue(any(pixels))
+            self.assertFalse(any(value for i, value in enumerate(pixels) if i % 50 >= 31))
+        old = icons.mask('LB', 50)
+        self.assertTrue(any(value for i, value in enumerate(old) if i % 50 >= 31))
+        for style in ('xbox', 'playstation'):
+            changed = icons.font_icons(original, style)
+            self.assertEqual(changed[:0x2000], original[:0x2000])
+        missing = original.replace(b'CWDH', b'NONE', 1)
+        with self.assertRaisesRegex(ValueError, 'no CWDH'): icons.font_icons(missing, 'xbox')
+
     def test_yaz0_roundtrip_and_invalid_reference(self):
         data = bytes(range(251)) * 11
         self.assertEqual(icons.yaz0(icons.layout.yaz0_stored(data, 4096)), data)

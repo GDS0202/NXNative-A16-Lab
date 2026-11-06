@@ -2,8 +2,9 @@
 
 The goal is sustained real-frame pacing and correct rendering. There is no
 measured A16 60 fps guarantee. The earlier MeloNX frame rates are not NXNative
-measurements. The current iPad report establishes boot/gameplay and intermittent stalls,
-without a trace or a measured baseline. On 2026-11-05 the user clarified that
+measurements. The [2026-11-06 diagnostic baseline](../dm/games/01007EF00011E000/README.md#a16-diagnostic-baseline-2026-11-06)
+now measures the installed native build; the [new source candidate](a16-session-review.md)
+still needs device validation. On 2026-11-05 the user clarified that
 purple artifacts occurred only in MeloNX, never in this recompilation.
 See [live quality and the corrected report](live-quality.md).
 
@@ -11,21 +12,24 @@ See [live quality and the corrected report](live-quality.md).
 
 1. In the new launcher's Performance section enable **Record performance
    trace**. The setting takes effect on the next game launch. Leave internal
-   render scale at 100%, Handheld (nominally 1280x720), output height 720
-   and Standard presentation. The HUD is optional. Read the resolution
+   starting render scale at 100%, Handheld (nominally 1280x720), output height 1080
+   and spatial MetalFX for the current target route. The HUD is optional. Read the resolution
    caveat below before treating a comparison as identical internal work.
 2. Load the same save. Record 60 seconds standing still, 60 seconds moving and
    rotating the camera, inventory/map, fast travel, a new area, then at least
    ten minutes of play. Note when the gameplay route starts relative to launch.
-3. After the route wait five seconds, leave the game and copy `stutter.jsonl`
-   and `capabilities.json` from Files > On My iPad > BOTW A16 Lab. That visible
+3. After the route wait five seconds, leave the game and copy `stutter.jsonl`,
+   `stutter.1.jsonl` if present, `performance-events.jsonl`,
+   `performance-events.1.jsonl` if present, and `capabilities.json` from Files > On My iPad > BOTW A16 Lab. That visible
    app folder already **is Documents**. Copy before the next launch: one previous
-   trace is kept as `stutter.prev.jsonl`. `log.txt` is useful for a crash or a
+   session's segments are kept as `stutter.prev.jsonl` / `stutter.prev.1.jsonl`, with journals
+   `performance-events.prev.jsonl` / `performance-events.prev.1.jsonl`. `log.txt` is useful for a crash or a
    rendering failure; never include games, saves or keys in a public report.
 4. On the Mac (Python only):
 
    ```sh
    python3 scripts/stutter_analyze.py /path/to/stutter.jsonl
+   python3 scripts/stutter_analyze.py /path/to/stutter.jsonl --previous-segment /path/to/stutter.1.jsonl --events /path/to/performance-events.jsonl
    python3 scripts/stutter_analyze.py /path/to/candidate.jsonl --compare /path/to/baseline.jsonl --start 45 --seconds 60
    ```
 
@@ -38,9 +42,13 @@ session. Record those observations separately.
 ## What the recording measures
 
 The collector has a fixed 4096-record sequence queue (about 1 MiB), a utility
-writer, a 64 MiB file cap and one previous file. Producers do no file I/O, heap
+writer, two rotating 32 MiB segments and the previous session's segments. A
+separate policy/memory journal rotates at 512 KiB. Producers do no file I/O, heap
 allocation or mutex waiting. Full queues/contention are explicitly counted;
-capped or lossy traces cannot certify an A/B gain. Ordinary recording is off.
+capped or lossy traces cannot certify an A/B gain. The analyzer labels a retained
+window whose first segments rotated out, and rejects mixed-session files.
+Schema-1 capped traces remain readable but are incomplete. Ordinary recording is off;
+verbose scene logging also requires explicit `DM_LONGFRAME=1`.
 The recording overhead still needs an on/off test on the iPad; low overhead is
 a design property, **not a measured A16 result**.
 
@@ -130,9 +138,9 @@ Do not delete saves or reinstall the app to create a cold texture cache.
 Two workers and a 1024 learned-record budget remain conservative experimental
 defaults. There is no evidence yet that four workers or an adaptive manager is
 better on this iPad. The new [automatic quality controller](live-quality.md) is explicitly opt-in
-and still needs paired device measurements; it does not change those worker defaults. Likewise, the current learned list retains newest
-first-discovered records, not measured most-used pipelines; usage-weighted
-preparation needs reuse/cost data before replacing that policy.
+and still needs paired device measurements; it does not change those worker defaults. The current learned ranking prioritizes recent runtime misses, then
+the newest remaining first-discovered records. This is not a measured frequency/cost predictor;
+usage-weighted preparation needs additional reuse/cost data.
 
 On a 60 Hz display, 30 and 60 fps have regular refresh divisors. A 25 fps cap
 cannot produce equally spaced refreshes on that display. Prefer a measured

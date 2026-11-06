@@ -15,10 +15,10 @@ Values fixed by `env.txt` or the launch environment remain locked.
 |---|---|
 | FPS target | The existing verified 30/60 fps frame-step controller; preserves movie, thermal and memory guards |
 | Internal scale | A fraction of the current console mode's scene base, independent of output size |
-| Lock full scale | New verified BOTW flag that applies 100% every frame; off preserves native dynamic scaling in manual mode |
+| Force selected scale | Verified BOTW flag that applies the selected scale directly; off preserves native dynamic scaling in manual mode; automatic quality owns the flag while active |
 | Display output | 720p, 900p, 1080p or the display's size; never silently lowered by automatic quality |
 | Upscaling | Standard bilinear or the existing spatial MetalFX pass, with capability fallback |
-| Texture filtering | Original, anisotropy capped at 2x, or 1x plus mip floor 1; compare/reduction/nonmip samplers are excluded |
+| Texture filtering | Original or eligible trilinear anisotropy capped at 2x/1x; guest LOD clamps and protected data sampling are preserved |
 | Camera visibility | Optional active-camera far clip; zero preserves the original game value |
 
 Texture filtering does **not** discard or resize the textures' allocated
@@ -53,15 +53,16 @@ remain the manual baseline. The output size never changes automatically.
 If the allowed quality range cannot meet the target, the menu says the floor
 has been reached rather than inventing 60 fps or lowering the floor.
 
-Recovery is paused at serious thermal state, Low Power Mode or less than
-512 MiB of process headroom. More available RAM does not prove more compiler
+Recovery is paused at serious thermal state, Low Power Mode, active OS/guard
+memory pressure or less than 768 MiB of process headroom. More available RAM does not prove more compiler
 or texture workers improve frame pacing. Shader preparation timing now has a
 launcher choice: device default, before gameplay, or background. The selected
 shader worker count applies to the before-gameplay path.
 
 **Measure current scene** records actual drawable presentation callbacks for
 30 seconds, including stalls, with a bounded buffer. It shows real FPS and P95
-separately from guest production. Suspension cancels the measurement. A stationary
+separately from guest production. Suspension, a manual settings change or an automatic
+quality change invalidates the measurement; wait for quality to settle before starting it. A stationary
 or menu sample does not certify a demanding world route. Use the
 [recorded A16 route](performance.md) for device comparisons.
 
@@ -112,7 +113,8 @@ guest texture backing remain: a GPU upload fence does not authorize destroying
 bytes the guest may read or partially update later. Preserving them can use
 more RAM than destructive discard, but is a data-lifetime requirement rather
 than a purple-color workaround. The user currently reports about 2.85 GiB used
-and 1.15 GiB process headroom; peaks and sustained thermal behavior remain unmeasured.
+and 1.15 GiB process headroom in an earlier report. The [later complete diagnostic review](a16-session-review.md)
+supplies the installed build's measured baseline; new candidate performance is still unmeasured.
 
 ## Validation limits
 

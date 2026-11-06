@@ -77,6 +77,15 @@ t_fstep: t_fstep.c ../nvn/nvn_fstep.h
 	clang -O1 -Wall -o $@ t_fstep.c
 t_tuning: t_tuning.c ../nvn/nvn_tuning.c ../nvn/nvn_tuning.h
 	clang -O1 -g -Wall -pthread -o $@ t_tuning.c ../nvn/nvn_tuning.c
+t_memory: t_memory.c ../nvn/nvn_memory.h
+	clang $(CFLAGS) -o $@ t_memory.c
+t_sampler_quality: t_sampler_quality.c ../nvn/nvn_sampler_quality.h
+	clang $(CFLAGS) -o $@ t_sampler_quality.c
+t_sampler_lod: t_sampler_lod.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_sampler_lod.m $(MTL_T_SRC) $(FW)
+check_t_sampler_lod: RUN_ENV = MTL_DEBUG_LAYER=1
+t_archive_route: t_archive_route.c ../nvn/nvn_archive_route.h
+	clang $(CFLAGS) -o $@ t_archive_route.c
 t_romfs_overlay: t_romfs_overlay.c ../../host/hle_romfs_overlay.c ../../host/romfs_overlay.h
 	clang -O1 -g -Wall -o $@ t_romfs_overlay.c ../../host/hle_romfs_overlay.c
 t_thermal: t_thermal.c $(MTL_T_DEP)
