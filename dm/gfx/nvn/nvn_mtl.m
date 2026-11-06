@@ -4584,6 +4584,13 @@ static id<MTLSamplerState> samp_by_id(int sid) {   // Caller holds g_rmu
     d.borderColor = p.border[3] > 0.5f ? (p.border[0] > 0.5f ? MTLSamplerBorderColorOpaqueWhite : MTLSamplerBorderColorOpaqueBlack) : MTLSamplerBorderColorTransparentBlack;
     d.supportArgumentBuffers = YES;
     id<MTLSamplerState> s = [g_dev newSamplerStateWithDescriptor:d];
+    unsigned original_aniso = nvn_sampler_anisotropy(p.aniso, 0, p.minf, p.magf, p.cmp_mode, p.reduction, p.lod_min, p.lod_max, p.lod_bias);
+    if (!s && d.maxAnisotropy != original_aniso) {
+        // A quality override must never remove a sampler the original state can
+        // represent. Keep all guest fields and retry only the original anisotropy.
+        d.maxAnisotropy = original_aniso;
+        s = [g_dev newSamplerStateWithDescriptor:d];
+    }
     if (s) { g_sview[sid] = (void *)CFBridgingRetain(s); g_srid[sid] = s.gpuResourceID._impl; }
     return s;
 }

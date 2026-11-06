@@ -53,15 +53,15 @@ remain the manual baseline. The output size never changes automatically.
 If the allowed quality range cannot meet the target, the menu says the floor
 has been reached rather than inventing 60 fps or lowering the floor.
 
-Recovery is paused at serious thermal state, Low Power Mode or less than
-512 MiB of process headroom. More available RAM does not prove more compiler
+Recovery is paused at serious thermal state, Low Power Mode, active OS/guard
+memory pressure or less than 768 MiB of process headroom. More available RAM does not prove more compiler
 or texture workers improve frame pacing. Shader preparation timing now has a
 launcher choice: device default, before gameplay, or background. The selected
 shader worker count applies to the before-gameplay path.
 
 **Measure current scene** records actual drawable presentation callbacks for
 30 seconds, including stalls, with a bounded buffer. It shows real FPS and P95
-separately from guest production. Suspension cancels the measurement. A stationary
+separately from guest production. Suspension or a settings change invalidates the measurement. A stationary
 or menu sample does not certify a demanding world route. Use the
 [recorded A16 route](performance.md) for device comparisons.
 

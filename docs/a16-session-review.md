@@ -43,6 +43,74 @@ work, including lookahead; it is not yet a universal frequency/cost predictor.
 No existing pipeline archive, converted texture cache or guest resource is
 deleted to make the benchmark look better.
 
+## Intervention order and remaining evidence
+
+| Priority | Evidence and intervention | Expected impact | Risk / complexity | Status |
+|---|---|---|---|---|
+| 1 | Cap recovery never reaches its old headroom threshold; correct the state machine | Remove an unnecessarily persistent 30 FPS ceiling when OS pressure ends | Medium: recovery must not oscillate or ignore genuine pressure | Policy implemented and portable tests passed; device recovery pending |
+| 1 | Font artwork extends outside the declared sampled width; fit the complete labels | Restore menu LB/RB/L1/R1 | Low: atlas-only edit, font metrics and action guides preserved | Real owned assets structurally verified; device visuals pending |
+| 1 | Quality mode altered LOD/data sampling and sampler lifetimes; preserve semantics and defer release | Correct modified-filter rendering | Medium: per-sampler eligibility is conservative | Implemented and CPU tests passed; the exact dark-character case still needs reproduction |
+| 1 | Compressed-block render-target views cannot match the substituted backing | Correct the declined attachment | High: new GPU decode/transcode and ordering contract | Open; no unsafe byte copy or blocking readback introduced |
+| 2 | Successful fragmented archive hits consume submission time; prefer ready compatible variants | Reduce synchronous pipeline lookup hitches | Medium/high: temporary pulling can cost GPU time | Implemented, exhaustive routing tests passed; Metal execution and iPad A/B pending |
+| 2 | Cold scratch remains retained and optional work continues near pressure | Recover safe transient capacity and avoid additional work | Medium: GPU completion and reuse age are mandatory | Implemented, policy tests passed; resident-byte benefit unmeasured |
+| 2 | Duplicate shader loads and discovery-order preparation | Reduce redundant loading; prioritize recent runtime misses | Medium: concurrent ownership, bounded persistent metadata | Implemented; frequency/cost prediction deliberately not claimed |
+| 3 | Verbose context logs and a fixed trace cap obscure transitions | Reduce diagnostic overhead and preserve recent state transitions | Low/medium: rotation and concurrency | Rolling recorder implemented; sanitizer tests and long-session device acceptance distinguished |
+
+These priorities follow the measured bottlenecks. Lowering resolution cannot
+remove CPU archive lookup, texture upload or pressure events. A second archive
+or an unvalidated encoder change is not justified by those measurements.
+
+## Settings audit
+
+This is a source-path audit, not a claim that every setting has been retested
+visually on the iPad. Existing environment-file locks and preference persistence
+remain authoritative. The launcher-order regression introduced by the new
+archive option was caught by the Mac Swift storage test and corrected by keeping
+all Performance rows after Game and Controls.
+
+| Controls audited | Finding / disposition |
+|---|---|
+| FPS Target, Hold Frames When Late | The lateness hold is separate from memory/thermal/movie limits; effective cap and reason are now exposed. See [cap policy](reference/frame-rate.md#memory-pressure-cap-recovery). |
+| Automatic Quality, Minimum Internal Resolution | The supported floor is rounded upward; output is independent; recovery now observes the OS and guard states as well as headroom. No resolution change can fix a CPU-bound interval. |
+| Internal Scale, Force Selected Scale | The force flag applies the selected scale, not always 100%; automatic mode owns it while enabled. The unrelated legacy Dynamic Resolution row is absent without its guest fixup. |
+| Texture Filtering, Automatic Texture Filtering | Both use the same protected-sampler policy; original LOD is retained. If Metal rejects an altered sampler, creation retries the original anisotropy. Automatic filtering remains opt-in. See [sampler correction](reference/rendering.md#texture-quality-must-preserve-data-sampler-lod). |
+| Camera Visibility, Automatic Visibility Reduction | These alter a verified camera far clip, not actor/terrain streaming. Automatic reduction is opt-in and has an independent floor. |
+| Output Height, MetalFX Spatial | Existing 1080p output is preserved by automatic quality; unsupported spatial scaling follows the existing presentation fallback. No temporal/frame-generation switch is invented. |
+| Frame Buffering | Retained: it trades one buffered frame of latency for decoupled delivery. A same-route on/off comparison remains required. |
+| Pipeline Prebuild | Retained: the current bundle-coverage path already avoids redundant work. The trace does not justify treating it as a new memory-saving switch. |
+| Learned Preparation, Budget, Shader Workers | Optional work observes pressure/headroom, workers are bounded, and recent runtime misses influence selection. Budgets 512/1024/2048 and workers 1/2/4 need isolated device comparison. |
+| BC Workers, Persistent ASTC Cache | Byte-compatible conversion and the existing bounded disk/staging policy remain. No claim that four workers outperform two. |
+| Memory Guard, Thermal Cap | Separate conditions and explicit reasons; thermal protection and movie/game-step semantics remain intact. Nominal OS thermal state is not a thermometer. |
+| Controller Icons | Same physical mapping and next-launch selection; sampled-width repair only. Existing action-guide artwork is preserved. |
+| Record Performance Trace | Restart-scoped recording remains optional; rolling segments and a separate transition journal replace silent exhaustion. |
+| Measure Current Scene | Actual presentation callbacks, bounded 30-second capture; suspension or settings changes invalidate completion instead of presenting a partial sample as complete. |
+
+## Resource and scheduling findings
+
+The full log reaches about 3623 MiB process resident and 2118 MiB reported GPU
+allocation. These are not independent amounts to add. Guest mappings, driver
+accounting, host allocations and resident file-backed pages require footprint /
+vmmap or Metal tools to attribute precisely; a 561 MiB archive on disk is not
+proof of 561 MiB permanently resident RAM. The existing logs cannot establish a
+new leak or an exact memory saving from the candidate.
+
+Guest storage and texture backing remain readable; no destructive discard is
+reintroduced. Live render targets, descriptor-visible objects, history, libraries
+and pipeline objects are not pressure-evicted without proven ownership/fence
+semantics. Safe completed cold upload/frame scratch is the first retirement
+class. Allocator-returned bytes and retired Metal capacity are separate counters;
+neither is mislabeled as a measured process-footprint reduction. The existing
+256 MiB ASTC disk budget, single 16 MiB write, one in-flight write, deferred
+release drain and autorelease pool remain intact.
+
+`PlacementMgr` and `RadarMgr` activity alone does not prove wasted work; the
+existing [BOTW CPU findings](../dm/games/01007EF00011E000/README.md#cpu) describe
+verified yielding behavior and its earlier tradeoffs. No unmeasured guest-thread
+sleep, polling patch, affinity rule or scheduling-priority change is added.
+Bounded preparation, per-key loading, the archive fast path and opt-in verbose
+context logging target identified host work. Energy and physical temperature
+before/after are not available from these files and remain device measurements.
+
 ## Memory and cap policy
 
 The detailed mechanism is in [memory pressure recovery](reference/frame-rate.md#memory-pressure-cap-recovery).
@@ -112,7 +180,8 @@ build. No blanket visual workaround is added or reverted for that report.
   unsafe. Its original-function capture correction is already in the baseline.
 
 Only owned resources are used. No third-party cache is downloaded or imported.
-Reusable archives must match game/module inputs, shader chain, relevant function
+No public cache was verified to meet this build's compatibility and provenance
+requirements. Reusable archives must match game/module inputs, shader chain, relevant function
 constants, GPU architecture and compatible OS/compiler binaries, with integrity
 checks. An unrelated emulator's cache is not automatically a Metal 4 archive.
 Keep pipeline prebuild enabled: the current bundled-coverage path already avoids
@@ -129,7 +198,8 @@ Locally executed on Linux:
   in disabled, ordinary and saturated modes. LeakSanitizer is disabled because
   this container cannot support its process inspection; ASan/UBSan remain active.
 - 29 targeted Python tests for controller resources, trace analysis, host reuse
-  safety and launcher settings.
+  safety and launcher settings; additional environment-table and launcher-list
+  contract tests after the source-CI findings.
 - Exact installed-IPA asset checksum and fourteen owned-font structural repairs:
   all non-texture sections/headers preserved, existing manifests verified;
   no game assets are part of this PR.
@@ -137,7 +207,12 @@ Locally executed on Linux:
 
 Mac-only tests were extended for concurrent shared/failed shader loading and
 archive-only quick-probe/fallback behavior. They are **not** claimed executed
-by Linux. The actual iOS host must compile/link in source CI. No new A16 FPS,
+by Linux. Source CI has compiled all three Mac host profiles, every graphics
+test, iOS host sources and the unsigned production iOS project with synthetic
+inputs. Its Mac jobs have also executed bounded preparation, persistent-cache
+pressure tests and the trace/frame-statistics ThreadSanitizer tests. These are
+component/compile results, not Metal GPU or game execution. The PR checks are
+the authoritative status for the latest commit. No new A16 FPS,
 visual, thermal or long-session result is claimed.
 
 The required five-game regression route is BOTW, TOTK and Wonder (NVN), Hades
