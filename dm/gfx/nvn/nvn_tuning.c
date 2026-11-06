@@ -21,6 +21,12 @@ static unsigned good_windows, bad_windows;
 static uint64_t measure_first, measure_last;
 static double measure_intervals[4096];
 static unsigned measure_count;
+static void cancel_measurement(void) {
+    state.measuring = state.measured_complete = state.measured_frames = 0;
+    state.measured_fps = state.measured_p95 = 0;
+    measure_first = measure_last = measure_count = 0;
+    atomic_store(&measure_active, 0);
+}
 
 static int compare(const void *a, const void *b) {
     double x = *(const double *)a, y = *(const double *)b;
@@ -81,7 +87,9 @@ int dm_tuning_set(const char *key, double value) {
     if (!key || !isfinite(value) || !atomic_load(&initialized)) return 0;
     double v = !strcmp(key, "DM_RENDER_SCALE") ? value * 100 : value;
     if (v < 0 || v > 25000 || fabs(v - round(v)) > 0.001) return 0;
-    pthread_mutex_lock(&lock); int ok = assign(key, (int)round(v)); pthread_mutex_unlock(&lock);
+    pthread_mutex_lock(&lock); int ok = assign(key, (int)round(v));
+    if (ok) cancel_measurement(); // A settings change invalidates a supposedly continuous benchmark.
+    pthread_mutex_unlock(&lock);
     return ok;
 }
 void dm_tuning_init(void *page, unsigned caps, int width, int height) {
@@ -115,11 +123,17 @@ void dm_tuning_system(uint64_t headroom, int thermal, int low) {
     if (!dm_tuning_active()) return;
     pthread_mutex_lock(&lock); state.headroom = headroom; state.thermal = thermal; low_power = low; system_known = 1; pthread_mutex_unlock(&lock);
 }
+void dm_tuning_limits(int cap, int reasons, int level, int pressure) {
+    if (!dm_tuning_active()) return;
+    pthread_mutex_lock(&lock);
+    state.effective_cap = cap; state.cap_reasons = reasons; state.memory_level = level; state.memory_pressure = pressure;
+    pthread_mutex_unlock(&lock);
+}
 void dm_tuning_boundary(void) {
     if (!dm_tuning_active()) return;
     pthread_mutex_lock(&lock); last = window_start = last_change = 0; samples = good_windows = bad_windows = 0;
     // A benchmark interrupted by suspension is not a continuous 30-second sample.
-    state.measuring = 0; measure_first = measure_last = measure_count = 0; atomic_store(&measure_active, 0);
+    if (state.measuring) cancel_measurement();
     pthread_mutex_unlock(&lock);
 }
 void dm_tuning_tick(uint64_t now, double gpu, double frame, double compilation, int movie) {
@@ -162,7 +176,7 @@ void dm_tuning_tick(uint64_t now, double gpu, double frame, double compilation, 
         last_change = now; good_windows = bad_windows = 0; state.changes++; apply();
     } else if (good_windows >= 5 && now - last_change >= 5000000000ull) {
         // Restore visibility and texture quality before increasing scene resolution.
-        if (state.thermal >= 2 || low_power || (system_known && state.headroom < (512ull << 20))) { state.status = DM_TUNE_THERMAL; goto done; }
+        if (state.thermal >= 2 || low_power || state.memory_level || state.memory_pressure || (system_known && state.headroom < (768ull << 20))) { state.status = DM_TUNE_THERMAL; goto done; }
         if (state.far_clip != state.requested.far_clip) {
             int original = state.requested.far_clip ? state.requested.far_clip : 25000;
             state.far_clip += 1000;
@@ -178,7 +192,7 @@ done:
 }
 void dm_tuning_measure(void) {
     pthread_mutex_lock(&lock); measure_first = measure_last = measure_count = 0;
-    state.measuring = 1; state.measured_frames = 0; state.measured_fps = state.measured_p95 = 0;
+    state.measuring = 1; state.measured_complete = 0; state.measured_frames = 0; state.measured_fps = state.measured_p95 = 0;
     atomic_store(&measure_active, 1);
     pthread_mutex_unlock(&lock);
 }
@@ -193,7 +207,7 @@ void dm_tuning_present(uint64_t timestamp) {
             state.measured_frames++;
             state.measured_fps = state.measured_frames * 1e9 / (double)(timestamp - measure_first);
             if (timestamp - measure_first >= 30000000000ull) {
-                state.measuring = 0; state.measured_p95 = percentile(measure_intervals, measure_count, .95);
+                state.measuring = 0; state.measured_complete = 1; state.measured_p95 = percentile(measure_intervals, measure_count, .95);
                 atomic_store(&measure_active, 0);
             }
         }
@@ -205,8 +219,10 @@ dm_tuning_snapshot dm_tuning_read(void) { pthread_mutex_lock(&lock); dm_tuning_s
 void dm_tuning_describe(char *text, size_t capacity) {
     dm_tuning_snapshot s = dm_tuning_read();
     const char *names[] = {"Manual", "Settling/loading", "GPU feedback", "CPU/streaming or other limit", "Quality floor reached", "Waiting for GPU samples", "Quality recovery paused"};
-    snprintf(text, capacity, "%s · %d%% (%d×%d nominal) · GPU %.1f ms\nTexture %d · visibility %d · %.2f GiB left\n%s: %d real frames · %.1f fps · p95 %.1f ms",
+    const char *limit = s.cap_reasons & 8 ? "Memory/recovery" : s.cap_reasons & 4 ? "Thermal/recovery" : s.cap_reasons & 2 ? "Movie" : s.cap_reasons & 1 ? "Selected target" : "Target active";
+    const char *pressure = s.memory_pressure == 2 ? "critical" : s.memory_pressure == 1 ? "warning" : "normal";
+    snprintf(text, capacity, "%s · %d%% (%d×%d nominal) · GPU %.1f ms\nFilter %d · visibility %d · %.2f GiB headroom\nTarget %d · cap %d · %s · OS pressure %s\n%s: %d real frames · %.1f fps · p95 %.1f ms",
         names[s.status], s.scale, s.width * s.scale / 100, s.height * s.scale / 100, s.gpu_ms,
-        s.texture, s.far_clip, s.headroom / 1073741824.0,
-        s.measuring ? "Measuring 30 s" : "Last measurement", s.measured_frames, s.measured_fps, s.measured_p95);
+        s.texture, s.far_clip, s.headroom / 1073741824.0, s.requested.target, s.effective_cap, limit, pressure,
+        s.measuring ? "Measuring 30 s" : s.measured_complete ? "Last complete measurement" : "No complete measurement", s.measured_frames, s.measured_fps, s.measured_p95);
 }

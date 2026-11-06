@@ -236,16 +236,14 @@ inherited device reports from new source checks. It keeps guest texture backing
 ([discard lifetime](../../../docs/reference/memory.md#guest-texture-data-discarded-after-an-upload)),
 adds [bounded cached BC conversion](../../../docs/reference/rendering.md#bounded-bc-conversion-and-persistent-astc-uploads),
 and defaults to handheld 1280x720 internally and a separate 720p output. There
-is no new A16 BOTW gameplay measurement. The cloud builder requires the exact
+is now an [A16 diagnostic baseline](#a16-diagnostic-baseline-2026-11-06), separate from unmeasured candidate changes. The cloud builder requires the exact
 registered 1.9.0 module builds instead of silently deriving a different profile.
 
 ## A16 experimental follow-up (2026-11-04)
 
 The private 1.9.0 build from the A16 lab fork boots and plays according to its
 user, with intermittent stalls. On 2026-11-05 the user clarified that purple
-artifacts occurred only in MeloNX, never in this recompilation. No device trace or measured
-FPS baseline has been supplied. Source CI and synthetic component tests do not
-upgrade that report to validated gameplay.
+artifacts occurred only in MeloNX, never in this recompilation. At that time no device trace had been supplied; the [later diagnostic session](#a16-diagnostic-baseline-2026-11-06) supersedes that limitation. Source CI and synthetic component tests do not establish performance of an untested candidate.
 
 Found on this game: the common tracker has the [retired-pool protection race](../../../docs/reference/nvn-objects.md#a-retired-pool-remains-read-only).
 Its correction is covered by a targeted CPU test, not yet an iPad gameplay test.
@@ -269,6 +267,78 @@ Actual private inspection confirmed the 256x1024 BC4 glyph sheet, 50x50 cells,
 5x20 grid and R8 action-guide textures. PlayStation labels add an external-font
 reference instead of substituting Xbox letters. Archive validation is distinct
 from checking font resolution, visuals and memory during actual gameplay.
+
+## A16 diagnostic baseline (2026-11-06)
+
+The installed private IPA was built at runtime source
+`334c4a75caf6c0471d1f34e8656e5f4620762dcd`, run `42111019197`.
+`402db28ef51015de39b808fe26b01ebb2e1a6c39` adds documentation with identical
+executable sources. The new candidate branches from that feature state, not the
+older `main`. Title/build/version gates remain unchanged: Switch 1.9.0,
+`v1114112`, main `cd57b23fa4bbad65803d9788c01821ee`.
+
+All four supplied diagnostics were read: 24,525 current log lines, 8,627 prior
+log lines, 226,902 valid trace records and the full capability report. No raw
+diagnostics, private paths, games or save data are committed. Hardware reports
+Apple A16, Apple8, Metal 4 **available**, no native BC, five active CPUs, about
+6 GB physical memory and a recommended GPU working set about 4 GiB. The working
+set recommendation is not free memory. Interpolation support is an API capability,
+not an implemented/active frame-generation path.
+
+The trace covers 2,055.039 seconds (34m15s), 108,735 actual presentations and no
+reported queue losses, then reaches the old 64 MiB cap. It is not a complete
+whole-session performance certification. The cap transition is at present/frame
+96,615, approximately 1,648.208 seconds after the first shown frame.
+
+| Actual displayed intervals | Whole retained trace | Before memory cap | After memory cap |
+|---|---:|---:|---:|
+| Mean real FPS | 52.911 | 58.602 | 29.853 |
+| 1% low FPS (mean slowest tail) | 26.314 | 27.407 | 20.002 |
+| 0.1% low FPS | 13.916 | 15.439 | 12.788 |
+| P95 interval, ms | 33.331 | 16.667 | 33.331 |
+| P99 interval, ms | 33.331 | 33.330 | 33.331 |
+| Maximum interval, ms | 349.969 | 349.969 | 116.657 |
+| Intervals over 50 ms | 60 | 28 | 32 |
+
+Thermal and low-power state remain zero in every trace sample. After the cap,
+sampled headroom is 778.56-855.87 MiB, below the old 1 GiB recovery threshold.
+Both logs record critical OS pressure at about 818 MiB and no subsequent cap
+release. The longer current log spans about 83 minutes of reported game frames
+and later reports only 472 MiB headroom: do not extrapolate the trace's minimum
+to the rest of the session or assume a permanent 60 cap would be safe.
+
+The worst CPU/guest intervals include frame 3347 (347.861 ms; upload 263.335,
+pipeline/library 12.029, BC decode 71.487 and cache work 112.530 ms), 12180
+(227.979 ms; pipeline/library 116.852, upload 93.830), and 21189 (164.949 ms;
+pipeline/library 150.545). These counters overlap across threads. In the timing
+window ending at frame 21300, **73 archive hits cost 292.4 ms, with zero newly
+compiled bases**. Thus the `compile_ms` aggregate is not proof of fresh shader
+compilation; expensive successful cache lookup is directly relevant.
+
+Startup uses the bundled g15p archive (560.9 MiB) plus 177 run files (112.0 MiB).
+The seed has 1,789 records; the learned list has 5,725, of which at most 2,048
+were selected. Preparation finishes 3,833 tasks in 4.35 seconds on four workers:
+1,621 shaders, 2,191 render pipelines and 21 compute pipelines, with zero fresh
+base compiles. A second redundant cache is not the missing feature. The full
+log contains 8,686 verbose long-frame context messages, 5,744 after the cap.
+
+The generated external font's bumper glyphs sample 30-31 atlas columns, while
+the old cell-centered two-letter artwork extended past those columns. Inspection
+of the exact installed IPA verified its asset SHA-256, bundle identity and main
+build; all fourteen generated font archives (seven per style) pass repair with
+unchanged non-texture sections. The already working action-guide packs are not
+edited by the font correction. Final menu/prompt visuals still require iPad testing.
+
+Found on this game:
+
+- [Memory pressure recovery and rolling diagnostics](../../../docs/reference/frame-rate.md#memory-pressure-cap-recovery).
+- [Fragmented archive hits, preparation and runtime-miss recency](../../../docs/reference/shaders.md#fragmented-pipeline-archive-hits-can-stall).
+- [Sampler LOD and GPU lifetime](../../../docs/reference/rendering.md#texture-quality-must-preserve-data-sampler-lod).
+- [Controller font sampled-width cropping](../../../docs/reference/services.md#generated-controller-glyphs-cropped-in-menus).
+
+The [candidate review and unresolved work](../../../docs/a16-session-review.md)
+separates implemented changes, actual checks, pending Metal/iPad validation and
+private-runner availability. No new A16 FPS improvement is certified here.
 
 ## Input metadata compatibility
 

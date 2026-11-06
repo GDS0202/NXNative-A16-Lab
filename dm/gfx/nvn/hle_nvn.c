@@ -1608,6 +1608,10 @@ static int thermal_capped(void) {
     pthread_mutex_unlock(&mu);
     return result;
 }
+// Bits: user 30 fps target, movie, thermal recovery/heat, memory guard, guest
+// fixed-step override. Keep policy causes separate from measured render FPS.
+static _Atomic int g_frame_cap_reasons;
+int nvn_frame_cap_reasons(void) { return atomic_load(&g_frame_cap_reasons); }
 static int fps_step_cap(void) {
     if (!dm_fps_state) return 0;
     uint32_t b = __atomic_load_n((uint32_t *)dm_fps_state, __ATOMIC_RELAXED); float t; memcpy(&t, &b, sizeof t);
@@ -1615,7 +1619,12 @@ static int fps_step_cap(void) {
     // Movies and a 30 fps target still need thermal samples: heat must reset the
     // calm interval, and cooling during those caps counts towards recovery.
     int thermal = thermal_capped();
-    return __atomic_load_n((uint32_t *)(dm_fps_state + 4), __ATOMIC_RELAXED) || t <= 30 || thermal || dm_mem_guard() ? 30 : 60;   // dm_mem_guard: memory nearly full
+    int movie = !!__atomic_load_n((uint32_t *)(dm_fps_state + 4), __ATOMIC_RELAXED);
+    int memory = dm_mem_guard();
+    int reasons = (t <= 30 ? 1 : 0) | (movie ? 2 : 0) | (thermal ? 4 : 0) | (memory ? 8 : 0);
+    if (__atomic_load_n((uint32_t *)(dm_fps_state + 0x24), __ATOMIC_RELAXED)) reasons |= 16;
+    atomic_store(&g_frame_cap_reasons, reasons);
+    return reasons & 15 ? 30 : 60;
 }
 static int fstep_on(void) { return fps_step_cap() != 0; }   // the host decides the steps in whole vsyncs
 // Engine-native frame limiters have no frame-step state page. Their requested
@@ -1787,7 +1796,12 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     (void)q; win_t *o = (win_t *)w; o->presents++;
     dm_fps_lock_tick();
     int c = fps_step_cap();
-    if (dm_fps_state) { static int was; if (c != was) { LOG("[nvn] frame step cap %d → %d fps at present %llu%s", was, c, (unsigned long long)o->presents, c == 30 && was == 60 ? (__atomic_load_n((uint32_t *)(dm_fps_state + 4), __ATOMIC_RELAXED) ? " (prerendered movie)" : thermal_capped() ? " (thermal state serious)" : "") : ""); was = c; } }
+    if (dm_fps_state) { static int was, why_was = -1; int why = nvn_frame_cap_reasons();
+        if (c != was || why != why_was) {
+            LOG("[nvn] frame step cap %d → %d fps at present %llu; reasons=%#x (user30=1 movie=2 thermal=4 memory=8 fixed-step=16); DM_FPS_HOLD only governs late-frame holds", was, c, (unsigned long long)o->presents, why);
+            was = c; why_was = why;
+        }
+    }
     if (c) fstep_tick(o, c);
     static uint64_t prev_in, prev_out, prev_pass, prev_draw;
     present_cfg(o);
@@ -1900,8 +1914,8 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     }
     if (f >= 8) { double g = mtl_gpu_ms(f - 8); if (g >= 0) { tpush(3, g); trow(f - 8, "@gpu_ms", g); g_hr[g_hn++ % HRN] = g; }   // GPU time is taken 8 frames late (already completed)
         { lf_rec *r = &g_lf[(f - 8) % LFN]; if (g >= 0 && r->f == f - 8) mtl_ab_gpu(f - 8, g, r->fr); }   // DM_AB phases
-        { lf_rec *r = &g_lf[(f - 8) % LFN];   // long-frame log (on by default, DM_LONGFRAME=0 turns it off): a line is printed only when the whole frame > 20 ms or GPU > 16.7 ms, and it is clearly above recent conditions
-          static int on = -1; if (on < 0) { const char *e = getenv("DM_LONGFRAME"); on = !(e && !strcmp(e, "0")); }
+        { lf_rec *r = &g_lf[(f - 8) % LFN];   // verbose long-frame context is opt-in; the bounded trace still records slow frames when enabled
+          static int on = -1; if (on < 0) { const char *e = getenv("DM_LONGFRAME"); on = e && !strcmp(e, "1"); }
           // "Long" is relative to recent conditions: when running steadily at 30 fps (menus / windowless host) or under sustained overload, every frame is > 20 ms; those are not long frames and must not flood the log - a frame has to be 40% above the sliding mean of the last 16 frames to count
           static double ef = 16.7, eg = 8; int lf = r->fr > 20.0 && r->fr > 1.4 * ef, lg = g > 16.7 && g > 1.3 * eg;
           if (r->f == f - 8) { ef += ((r->fr < 3 * ef ? r->fr : 3 * ef) - ef) / 16; eg += ((g < 3 * eg ? g : 3 * eg) - eg) / 16; }

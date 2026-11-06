@@ -15,9 +15,10 @@ typedef struct {
     dm_tuning_config requested;
     unsigned capabilities;
     int width, height, scale, texture, far_clip, status, thermal;
+    int effective_cap, cap_reasons, memory_level, memory_pressure;
     uint64_t headroom, changes;
     double gpu_ms, frame_ms;
-    int measuring, measured_frames;
+    int measuring, measured_frames, measured_complete;
     double measured_fps, measured_p95;
 } dm_tuning_snapshot;
 
@@ -25,6 +26,7 @@ void dm_tuning_init(void *page, unsigned capabilities, int width, int height);
 int dm_tuning_set(const char *key, double value); // rejects invalid/incompatible requests
 void dm_tuning_tick(uint64_t now, double gpu_ms, double frame_ms, double compile_ms, int movie);
 void dm_tuning_system(uint64_t headroom, int thermal, int low_power);
+void dm_tuning_limits(int effective_cap, int cap_reasons, int memory_level, int memory_pressure);
 void dm_tuning_boundary(void); // foreground/background or loading/menu boundary
 void dm_tuning_present(uint64_t timestamp); // actual drawable presentation, not guest FPS
 void dm_tuning_measure(void); // a bounded 30-second real presentation sample

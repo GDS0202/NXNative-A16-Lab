@@ -15,10 +15,10 @@ Values fixed by `env.txt` or the launch environment remain locked.
 |---|---|
 | FPS target | The existing verified 30/60 fps frame-step controller; preserves movie, thermal and memory guards |
 | Internal scale | A fraction of the current console mode's scene base, independent of output size |
-| Lock full scale | New verified BOTW flag that applies 100% every frame; off preserves native dynamic scaling in manual mode |
+| Force selected scale | Verified BOTW flag that applies the selected scale directly; off preserves native dynamic scaling in manual mode; automatic quality owns the flag while active |
 | Display output | 720p, 900p, 1080p or the display's size; never silently lowered by automatic quality |
 | Upscaling | Standard bilinear or the existing spatial MetalFX pass, with capability fallback |
-| Texture filtering | Original, anisotropy capped at 2x, or 1x plus mip floor 1; compare/reduction/nonmip samplers are excluded |
+| Texture filtering | Original or eligible trilinear anisotropy capped at 2x/1x; guest LOD clamps and protected data sampling are preserved |
 | Camera visibility | Optional active-camera far clip; zero preserves the original game value |
 
 Texture filtering does **not** discard or resize the textures' allocated
@@ -112,7 +112,8 @@ guest texture backing remain: a GPU upload fence does not authorize destroying
 bytes the guest may read or partially update later. Preserving them can use
 more RAM than destructive discard, but is a data-lifetime requirement rather
 than a purple-color workaround. The user currently reports about 2.85 GiB used
-and 1.15 GiB process headroom; peaks and sustained thermal behavior remain unmeasured.
+and 1.15 GiB process headroom in an earlier report. The [later complete diagnostic review](a16-session-review.md)
+supplies the installed build's measured baseline; new candidate performance is still unmeasured.
 
 ## Validation limits
 

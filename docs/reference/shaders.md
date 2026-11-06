@@ -1,5 +1,15 @@
 # Shaders
 
+### Fragmented pipeline archive hits can stall
+
+- **Symptom:** long frames report pipeline/library creation time even when the timing summary shows zero newly compiled bases and successful archive lookups.
+- **Cause:** the hybrid path searched all native-layout run archives synchronously before trying its prepared pulling variant. Cache presence did not bound the cost of finding a pipeline. The existing compaction recovery guard can legitimately preserve many files after an interrupted or failed Metal serialization.
+- **Fix:** with a matching bundled archive and more than eight run files, `DM_PSO_ARCH_ASYNC=1` first tries a cached/bundled pulling base without scanning run files or compiling a base. A successful compatible variant renders while the existing bounded queue loads the native layout. A failed quick probe preserves the original complete fallback; no draw is skipped. `DM_PSO_ARCH_ASYNC=0` restores the previous lookup order. A bounded shader-pair hint also reorders run-file searches, with every archive still eligible exactly once on a miss.
+- **Preparation:** one in-flight job per shader replaces double-checked insertion that discarded duplicates only after both workers loaded them. Compilation stays outside the dictionary lock. Runtime library lookahead now follows the selected worker budget, at most four on a 6 GB iOS device, and uses one during pressure. A bounded hash sidecar ranks recent runtime misses (including command lookahead) before first-discovery recency; original records and shader/build checks remain authoritative.
+- **Compaction:** upstream [#342](https://github.com/seedds/nxnative/issues/342) and `cdc6cef` already changed capture to original functions. The fallback marker remains: do not erase it or delete valid archives to force a risky retry. The supplied logs do not establish whether the later marker came from a serializer fault or interruption. Routing reduces search work without claiming to fix Metal's serializer.
+- **Check:** exhaustive portable search-order coverage; Mac synthetic tests cover archive-only quick misses, full fallback, no base compile on the quick path, and concurrent shader-load deduplication. New Metal execution and gameplay validation remain required before claiming a speedup.
+- **Found on:** [BOTW A16 diagnostics](../../dm/games/01007EF00011E000/README.md#a16-diagnostic-baseline-2026-11-06).
+
 Finding, keying and translating shaders (`dm/gfx/tools/shader_split.py`, `dmsh_build.py`, `dmsh_xlate`, `Program.cs`) and their pipelines. Each entry: symptom, cause, fix, the games it was found on. The [symptom index](../agents/symptoms.md) lists every symptom.
 
 ## Containers by engine

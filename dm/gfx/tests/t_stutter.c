@@ -28,22 +28,28 @@ int main(int argc, char **argv) {
             nvn_stutter_sample sample = {.frame = i, .timestamp_ns = 1000000000 + i * 16666667, .frame_ms = 16.666667, .gpu_ms = -1};
             nvn_stutter_frame(&sample); nvn_stutter_present(i, i, sample.timestamp_ns);
         }
+        nvn_stutter_memory(2000000000, 818u << 20, 2, 2, 1, 0);
+        nvn_stutter_policy(2000000001, 60, 30, 8, 80, 0, 1000);
         nvn_stutter_stop();
         FILE *file = fopen("stutter.jsonl", "r"); assert(file); char line[2048]; unsigned frames = 0, presents = 0;
         while (fgets(line, sizeof line, file)) {
             assert(strchr(line, '\n')); assert(!strstr(line, "\"timestamp_ns\":0")); assert(!strstr(line, "\"capped\":true"));
             frames += strstr(line, "\"kind\":\"frame\"") != NULL; presents += strstr(line, "\"kind\":\"present\"") != NULL;
         }
-        fclose(file); assert(frames == 4 && presents == 4 && !nvn_stutter_lost()); unlink("stutter.jsonl");
+        fclose(file); assert(frames == 4 && presents == 4 && !nvn_stutter_lost());
+        FILE *events = fopen("performance-events.jsonl", "r"); assert(events); int memory = 0, policy = 0;
+        while (fgets(line, sizeof line, events)) { memory += strstr(line, "\"kind\":\"memory\"") != NULL; policy += strstr(line, "\"kind\":\"policy\"") != NULL; }
+        fclose(events); assert(memory == 1 && policy == 1 && nvn_stutter_session());
     } else {
         pthread_t p[4]; for (uintptr_t i = 0; i < 4; i++) assert(!pthread_create(&p[i], NULL, producer, (void *)i));
         for (unsigned i = 0; i < 4; i++) assert(!pthread_join(p[i], NULL));
         nvn_stutter_system(1, 100, 200, 0, 0); nvn_stutter_boundary(2); nvn_stutter_stop(); nvn_stutter_stop();
         struct stat st; assert(!stat("stutter.jsonl", &st)); assert(st.st_size > 0 && st.st_size <= 8192);
-        FILE *f = fopen("stutter.jsonl", "r"); assert(f); char line[2048]; int capped = 0;
-        while (fgets(line, sizeof line, f)) { assert(strchr(line, '\n')); if (strstr(line, "\"capped\":true")) capped = 1; }
-        fclose(f); assert(capped); unlink("stutter.jsonl");
+        FILE *f = fopen("stutter.jsonl", "r"); assert(f); char line[2048];
+        while (fgets(line, sizeof line, f)) { assert(strchr(line, '\n')); assert(!strstr(line, "\"capped\":true")); }
+        fclose(f); assert(!stat("stutter.1.jsonl", &st)); assert(st.st_size <= 8192);
     }
-    assert(!chdir("/tmp")); assert(!rmdir(dir)); puts("Bounded trace: enable/disable, concurrent producers, cap and shutdown PASS");
+    unlink("stutter.jsonl"); unlink("stutter.1.jsonl"); unlink("performance-events.jsonl"); unlink("performance-events.1.jsonl");
+    assert(!chdir("/tmp")); assert(!rmdir(dir)); puts("Bounded trace: enable/disable, concurrent producers, rotation, event journal and shutdown PASS");
     return 0;
 }

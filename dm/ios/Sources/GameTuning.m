@@ -55,12 +55,12 @@ static BOOL fixed_key(NSString *key) {
         NSMutableArray *scales = [NSMutableArray array], *names = [NSMutableArray array];
         for (int p = 50; p <= 100; p += 5) { [scales addObject:@(p / 100.0)]; [names addObject:[NSString stringWithFormat:@"%d%% · %d × %d", p, s.width * p / 100, s.height * p / 100]]; }
         [rows addObject:@[@"DM_RENDER_SCALE", @"Manual / starting render scale", @(c.scale / 100.0), scales, names]];
-        if (!c.automatic) [rows addObject:@[@"DM_RENDER_FIXED", @"Lock full scale at 100%", @(c.fixed), @[@0,@1], @[@"Game's dynamic resolution",@"Fixed full scale"]]];
+        if (!c.automatic) [rows addObject:@[@"DM_RENDER_FIXED", @"Force selected internal scale", @(c.fixed), @[@0,@1], @[@"Game's dynamic resolution",@"Fixed selected scale"]]];
         [rows addObject:@[@"DM_AUTO_TEXTURE", @"Automatic texture filtering", @(c.auto_texture), @[@0,@1], @[@"Off",@"Allowed at resolution floor"]]];
     }
     [rows addObject:@[@"DM_OUTPUT_HEIGHT", @"Display output", @(c.output), @[@720,@900,@1080,@0], @[@"720p",@"900p",@"1080p",@"Native display"]]];
     [rows addObject:@[@"DM_PRESENT_UPSCALE", @"Upscaling", @(c.upscale), @[@0,@1], @[@"Standard",@"MetalFX spatial"]]];
-    [rows addObject:@[@"DM_TEXTURE_DETAIL", @"Texture filtering / mip detail", @(c.texture), @[@0,@1,@2], @[@"Original",@"Anisotropy ≤2×",@"Anisotropy 1× · mip floor 1"]]];
+    [rows addObject:@[@"DM_TEXTURE_DETAIL", @"Scene texture filtering (preserves LOD)", @(c.texture), @[@0,@1,@2], @[@"Original",@"Eligible anisotropy 2×",@"Eligible anisotropy 1×"]]];
     if (s.capabilities & DM_TUNE_CLIP) {
         [rows addObject:@[@"DM_VIEW_DISTANCE", @"Camera visibility limit", @(c.far_clip), @[@0,@10000,@7500,@5000,@2500,@1000,@500], @[@"Original",@"10000",@"7500",@"5000",@"2500",@"1000",@"500"]]];
         [rows addObject:@[@"DM_AUTO_VIEW", @"Automatic visibility reduction", @(c.auto_clip), @[@0,@1], @[@"Off",@"Allowed at resolution floor"]]];

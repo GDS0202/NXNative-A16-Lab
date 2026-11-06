@@ -62,6 +62,9 @@ int main(void) {
     frames(1200, 24, 25, 0); assert(dm_tuning_read().scale == 80);
     dm_tuning_system(0, 0, 0); frames(1200, 8, 16.666667, 0); assert(dm_tuning_read().scale == 80);
     dm_tuning_system(1100000000, 0, 1); frames(1200, 8, 16.666667, 0); assert(dm_tuning_read().scale == 80);
+    dm_tuning_system(1100000000, 0, 0); dm_tuning_limits(30, 8, 2, 2);
+    frames(1200, 8, 16.666667, 0); assert(dm_tuning_read().scale == 80); // Healthy process headroom cannot clear an OS pressure hold.
+    dm_tuning_limits(60, 0, 0, 0);
     dm_tuning_system(1100000000, 0, 0); frames(1800, 8, 16.666667, 0); assert(dm_tuning_read().scale == 100);
     dm_tuning_boundary(); now += 20000000000ull; frames(1, 24, 25, 0); assert(dm_tuning_read().scale == 100);
 
@@ -74,9 +77,11 @@ int main(void) {
     uint64_t stamp = 1000000000;
     for (int i = 0; i < 1802; i++) { dm_tuning_present(stamp); dm_tuning_present(stamp); stamp += 16666667; }
     dm_tuning_snapshot s = dm_tuning_read();
-    assert(!s.measuring && s.measured_frames == 1800);
+    assert(!s.measuring && s.measured_complete && s.measured_frames == 1800);
     assert(fabs(s.measured_fps - 60) < .001 && fabs(s.measured_p95 - 16.666667) < .001);
-    dm_tuning_measure(); dm_tuning_present(stamp); dm_tuning_boundary(); assert(!dm_tuning_read().measuring);
+    dm_tuning_measure(); dm_tuning_present(stamp); dm_tuning_boundary(); assert(!dm_tuning_read().measuring && !dm_tuning_read().measured_complete);
+    dm_tuning_measure(); dm_tuning_present(stamp); assert(dm_tuning_set("DM_TEXTURE_DETAIL", 1));
+    assert(!dm_tuning_read().measuring && !dm_tuning_read().measured_complete && !dm_tuning_read().measured_frames);
 
     init(); dm_tuning_init(NULL, 0, 0, 0); assert(!dm_tuning_set("DM_AUTO_QUALITY", 1));
     assert(!dm_tuning_set("DM_VIEW_DISTANCE", 1000));

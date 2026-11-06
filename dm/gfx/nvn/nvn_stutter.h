@@ -16,7 +16,7 @@ typedef struct {
     uint64_t upload_bytes, cache_hits, cache_misses, pso_new, library_new, bc_calls;
 } nvn_stutter_sample;
 
-// DM_STUTTER=1: at most 64 MiB per session plus one previous file, a bounded
+// DM_STUTTER=1: two rotating 32 MiB segments plus the previous session, a bounded
 // queue, no allocations or disk I/O on producers. Saturation is counted, never
 // hidden; an incomplete trace cannot certify performance.
 int nvn_stutter_start(void);  // call only after launcher/env choices are applied
@@ -25,5 +25,8 @@ void nvn_stutter_frame(const nvn_stutter_sample *sample);
 void nvn_stutter_present(uint64_t frame, uint64_t ticket, uint64_t timestamp_ns);
 void nvn_stutter_system(uint64_t timestamp_ns, uint64_t footprint, uint64_t headroom, int thermal, int low_power);
 void nvn_stutter_boundary(uint64_t timestamp_ns);  // pause/resume; do not join display intervals across it
+void nvn_stutter_memory(uint64_t timestamp_ns, uint64_t headroom, int level, int pressure, int reason, uint64_t malloc_returned);
+void nvn_stutter_policy(uint64_t timestamp_ns, int target, int cap, int reasons, int scale, int texture, int clip);
+uint64_t nvn_stutter_session(void);
 uint64_t nvn_stutter_lost(void);
 void nvn_stutter_stop(void);  // exit/tests only; never in a frame or presentation callback

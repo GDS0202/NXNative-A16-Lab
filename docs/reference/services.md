@@ -1,5 +1,13 @@
 # Services and SDK calls
 
+### Generated controller glyphs cropped in menus
+
+- **Symptom:** a two-character bumper label shows its first letter and only part of the second, while the action-guide diamond already works.
+- **Cause:** generated icons were centered in the font's entire atlas cell, but BFFNT CWDH `glyphWidth` restricts the sampled columns. The left bearing is a placement metric, not an offset that makes the whole cell visible. Metadata can follow TGLP's embedded texture payload.
+- **Fix:** walk declared FFNT sections, validate CWDH widths and fit each complete symbol inside its sampled width, preserving aspect ratio, advance, bearing, CMAP and font headers. Do not abbreviate bumper labels or modify the already working guide layouts/textures.
+- **Check:** synthetic visible-width and missing-metadata cases. Fourteen actual owned generated font archives pass non-texture section equality; both styles' existing resource manifest hashes were verified. No original font or game asset is published. Final glyph visuals on iPad still need validation.
+- **Found on:** [BOTW A16 diagnostics](../../dm/games/01007EF00011E000/README.md#a16-diagnostic-baseline-2026-11-06).
+
 SDK calls and system services the host answers (`dm/host/hle_*.c`). Each entry: symptom, cause, fix, the games it was found on. The [symptom index](../agents/symptoms.md) lists every symptom.
 
 ## Service connections

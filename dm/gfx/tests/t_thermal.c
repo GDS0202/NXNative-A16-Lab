@@ -8,6 +8,7 @@
 #include <string.h>
 
 int nvn_game_fps(void);
+int nvn_frame_cap_reasons(void);
 static _Alignas(8) uint8_t fps_state[0x40];
 uint8_t *dm_fps_state = fps_state;
 static _Atomic uint64_t test_now;
@@ -58,6 +59,7 @@ int main(void) {
         CHECK("Mac with no thermal state keeps 60 fps", nvn_game_fps() == 60);
         at(11, 1); CHECK("fair keeps 60 fps", nvn_game_fps() == 60);
         at(12, 2); CHECK("serious holds 30 fps", nvn_game_fps() == 30);
+        CHECK("thermal cap has an explicit diagnostic reason", nvn_frame_cap_reasons() & 4);
         int reads = atomic_load(&thermal_reads);
         at(12, 0); CHECK("a second call uses the cached thermal sample", nvn_game_fps() == 30 && atomic_load(&thermal_reads) == reads);
         at(13, 1); CHECK("fair starts recovery while keeping 30 fps", nvn_game_fps() == 30);
@@ -68,6 +70,7 @@ int main(void) {
         CHECK("heat during a movie resets the earlier cooling interval", nvn_game_fps() == 30);
         at(74, 1); CHECK("29 calm seconds do not release the cap", nvn_game_fps() == 30);
         at(75, 1); CHECK("30 calm seconds restore 60 fps", nvn_game_fps() == 60);
+        CHECK("recovery clears the diagnostic cap reason", nvn_frame_cap_reasons() == 0);
 
         at(76, 3); CHECK("critical also holds 30 fps", nvn_game_fps() == 30);
         movie(1); at(77, 1); (void)nvn_game_fps();

@@ -133,6 +133,14 @@ int main(void) { @autoreleasepool {
     char dir[] = "/tmp/t_pso_warm.XXXXXX"; if (!mkdtemp(dir)) return 1;
     mtl_init();
     if (!fixtures(@(dir))) { fprintf(stderr, "failed to compile synthetic shader fixtures\n"); [NSFileManager.defaultManager removeItemAtPath:@(dir) error:nil]; return 1; }
+    uint64_t before = g_warm_shader_loads;
+    dispatch_apply(32, DISPATCH_APPLY_AUTO, ^(size_t i) { (void)i; @autoreleasepool { (void)warm_shader(@"warm-vs", 0); } });
+    EXPECT("32 concurrent users load one shared shader once", 1, g_warm_shader_loads - before);
+    EXPECT("completed shared shader remains usable", 1, warm_shader(@"warm-vs", 0) != nil);
+    before = g_warm_shader_loads;
+    dispatch_apply(32, DISPATCH_APPLY_AUTO, ^(size_t i) { (void)i; @autoreleasepool { (void)warm_shader(@"warm-missing", 0); } });
+    EXPECT("32 concurrent failed loads are attempted once", 1, g_warm_shader_loads - before);
+    EXPECT("failed shared shader remains a cached failure", 1, warm_shader(@"warm-missing", 0) == nil);
     scenario(@(dir), 0); scenario(@(dir), 1);
     const char *mode = getenv("DM_PSO_MTL4");
     if (mode) EXPECT("requested compiler path selected", strcmp(mode, "0") != 0, g_comp4 != nil);

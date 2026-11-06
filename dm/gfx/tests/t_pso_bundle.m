@@ -115,6 +115,18 @@ int main(void) { @autoreleasepool {
         EXPECT("covered draw: its base from the bundle", arch0 + 1, g_pb_archived);
         EXPECT("covered draw: none compiled", built0, g_pb_built);
         EXPECT("covered draw: nothing captured for the device's archive", new0, g_arch_new);
+        EXPECT("quick probe: already prepared pipeline usable", 1, pso_build_mode(d, &err, 0, 1) != nil);
+        // With the same valid archive only in the run-file list, a quick miss
+        // must not scan it or compile. The ordinary fallback must still find it.
+        NSArray *saved_runs = g_arch4, *saved_pull = g_arch4p; id<MTL4Archive> saved_bundle = g_arch_bundle;
+        g_arch4 = @[saved_bundle]; g_arch4p = @[]; g_arch_bundle = nil; nvn_hm_clear(&g_pbase, hm_rel);
+        uint64_t probes = g_archive_probes, builds = g_pb_built;
+        EXPECT("quick miss: no synchronous run-file fallback", 1, pso_build_mode(d, &err, 1, 1) == nil);
+        EXPECT("quick miss: no run-file probes", probes, g_archive_probes);
+        EXPECT("quick miss: no compile even if requested", builds, g_pb_built);
+        EXPECT("ordinary fallback: valid run archive still used", 1, pso_build_ex(d, &err, 0) != nil);
+        EXPECT("ordinary fallback: no base compiled", builds, g_pb_built);
+        g_arch4 = saved_runs; g_arch4p = saved_pull; g_arch_bundle = saved_bundle;
     }
     // the near = 0 depth mode: not what the archive was made for, so the device's prebuild runs, and its main0_z bases are not in the archive
     [NSFileManager.defaultManager removeItemAtPath:[arch stringByAppendingPathComponent:@"prebuilt.tsv"] error:nil];

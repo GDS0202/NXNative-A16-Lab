@@ -25,6 +25,30 @@ def fixture(intervals, gpu=5, compile_ms=0):
 
 
 class Analyze(unittest.TestCase):
+    def test_rolling_segments_and_journal_preserve_memory_transition(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            rows = fixture([16, 16, 16])
+            header = {'kind': 'header', 'schema': 2, 'generated_fps': 0, 'session': 456, 'segment': 2, 'events_only': False}
+            first = [header] + rows[1:4] + [rows[-1]]
+            second = [dict(header, segment=3)] + rows[4:]
+            memory = {'kind': 'memory', 'timestamp_ns': 1_020_000_000, 'level': 2, 'os_pressure': 2, 'reason': 1}
+            for name, data in [('old', first), ('new', second), ('events', [dict(header, events_only=True), memory])]:
+                (root / name).write_text(''.join(json.dumps(r) + '\n' for r in data))
+            merged = a.read_segments(root / 'new', root / 'old', [root / 'events'])
+            out = a.analyze(merged)
+            self.assertEqual(out['displayed_real_frames']['samples'], 3)
+            self.assertEqual(out['memory_events'][0]['level'], 2)
+            self.assertTrue(out['retained_window']); self.assertFalse(out['complete'])
+            second[0]['session'] = 457
+            (root / 'new').write_text(''.join(json.dumps(r) + '\n' for r in second))
+            with self.assertRaisesRegex(ValueError, 'different sessions'): a.read_segments(root / 'new', root / 'old')
+
+    def test_duplicate_ticket_at_a_different_timestamp_is_not_a_new_real_frame(self):
+        rows = fixture([16, 16])
+        rows.append(dict(rows[1], timestamp_ns=1_008_000_000))
+        self.assertEqual(a.analyze(rows)['displayed_real_frames']['samples'], 2)
+
     def test_known_percentiles_and_tail_means(self):
         stats = a.summarize([10] * 98 + [50, 100])
         self.assertEqual(stats['p95_ms'], 10)

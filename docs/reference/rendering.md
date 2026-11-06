@@ -1,5 +1,13 @@
 # Rendering
 
+### Texture quality must preserve data sampler LOD
+
+- **Symptom:** a character becomes dark or incorrect after selecting non-original texture filtering, possibly while automatic texture quality is enabled.
+- **Cause:** the most aggressive global filter forced `lodMinClamp` to one on all mipmapped non-compare/non-reduction samplers. Metal applies this clamp even to explicit-level sampling, so texture-backed lighting/data can read the wrong mip. Sampler re-registration also released the previous sampler before already encoded GPU IDs necessarily finished using it. The supplied trace did not record the effective automatic filter, so the report for the middle preset is not fully explained by that trace alone.
+- **Fix:** filtering modes only cap eligible trilinear anisotropic samplers; all guest LOD clamps remain unchanged. Compare/reduction, low-anisotropy, nonmipmapped, biased and explicitly restricted samplers retain their original policy. Re-registration and quality changes retire old samplers after a GPU fence and invalidate descriptor/argument generations. Original remains the fallback for excluded samplers. This does not resize allocations or claim RAM savings.
+- **Check:** portable semantic exclusions and eligible filtering, followed by Original/2x/1x and automatic-mode device captures. New policy traces expose the effective filter. Picture correctness on the updated IPA is not yet confirmed.
+- **Found on:** [BOTW A16 diagnostics](../../dm/games/01007EF00011E000/README.md#a16-diagnostic-baseline-2026-11-06).
+
 The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. Each entry: symptom, cause, fix, the games it was found on. The [symptom index](../agents/symptoms.md) lists every symptom.
 
 ## Textures and formats
@@ -238,7 +246,7 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 - **Cause:** a GPU block encoder writes a BC texture through an uncompressed integer view (one texel per block). Metal can neither attach a compressed format nor make an uncompressed view of one.
 - **Fix:** such a pass draws into an uncompressed shadow of blocks × blocks in the view's format: the level's (or layer's, or depth plane's) blocks are copied into it through a buffer before the pass and back after it (`bcrt_attach` / `bcrt_flush` in `nvn_mtl.m`; the method comes from PR #11). The shadows stay resident and are reused, and they are kept out of the load-skip and store-elision bookkeeping. `attach`, the pipeline prediction and the sampling views go by the NVN format, so BC textures are never attached or viewed raw. The encoder's output must be declared `uint` ([Integer fragment outputs declared by hand](shaders.md#integer-fragment-outputs-declared-by-hand)).
 - **Found on:** [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md): agl's BC4 block encoder (`8e2cc2671cae6020`) writes a 32×32 RGTC1 (BC4) texture through an `RGBA16UI` view (one texel per 8-byte block); its twin for a 2D source (`93aa5e22a8202409`) failed in an iPhone run; GitHub issue #4 (reported from an iPhone 14 Pro / A16). [The Legend of Zelda: Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md): agl's BC4 block encoder (`0544282c162305db`, the same shader Mario Wonder ships) encodes a 32×32×32 BC4 3D texture one depth plane per pass through an `RGBA16UI` view; a raw dump at frame 1500 of the new-game route: the texture was all zeros before, now all 32 planes hold encoded blocks.
-- **Note:** the A16 has no BC formats; the host used to store BC textures decompressed on such GPUs (about 3.9 GB instead of 2.8 GB for BotW, over iOS's limit on a 6 GB iPhone), and that path has since been removed: only GPUs with BC are supported.
+- **Upstream note:** A16 has no native BC formats. This fork restores bounded software BC uploads, using ASTC where supported by the conversion path. GPU-generated compressed render targets remain a separate limitation: the native-BC shadow path cannot copy encoded BC blocks into R8/ASTC backing without the appropriate decode/transcode. See the [A16 investigation](../a16-session-review.md#open-rendering-work); a blocking CPU readback or blanket uncompressed conversion is not enabled as a performance fix.
 
 ### A depth texture drawn through a colour view
 
