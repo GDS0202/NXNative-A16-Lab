@@ -20,6 +20,10 @@ int main(int argc, char **argv) {
     setenv("DM_STUTTER", "0", 1); assert(!nvn_stutter_enabled());  // pre-launch queries must not initialize
     int normal = argc > 1 && !strcmp(argv[1], "normal");
     int on = argc > 1 && (!strcmp(argv[1], "on") || normal); setenv("DM_STUTTER", on ? "1" : "0", 1);
+    if (normal) {
+        FILE *f = fopen("performance-events.1.jsonl", "w"); assert(f); fputs("old rotated journal\n", f); fclose(f);
+        f = fopen("performance-events.jsonl", "w"); assert(f); fputs("old current journal\n", f); fclose(f);
+    }
     assert(nvn_stutter_start() == on); assert(nvn_stutter_enabled() == on);
     if (!on) { nvn_stutter_present(1, 1, 1); nvn_stutter_stop(); assert(access("stutter.jsonl", F_OK)); }
     else if (normal) {
@@ -40,6 +44,10 @@ int main(int argc, char **argv) {
         FILE *events = fopen("performance-events.jsonl", "r"); assert(events); int memory = 0, policy = 0;
         while (fgets(line, sizeof line, events)) { memory += strstr(line, "\"kind\":\"memory\"") != NULL; policy += strstr(line, "\"kind\":\"policy\"") != NULL; }
         fclose(events); assert(memory == 1 && policy == 1 && nvn_stutter_session());
+        events = fopen("performance-events.prev.1.jsonl", "r"); assert(events);
+        assert(fgets(line, sizeof line, events) && !strcmp(line, "old rotated journal\n")); fclose(events);
+        events = fopen("performance-events.prev.jsonl", "r"); assert(events);
+        assert(fgets(line, sizeof line, events) && !strcmp(line, "old current journal\n")); fclose(events);
     } else {
         pthread_t p[4]; for (uintptr_t i = 0; i < 4; i++) assert(!pthread_create(&p[i], NULL, producer, (void *)i));
         for (unsigned i = 0; i < 4; i++) assert(!pthread_join(p[i], NULL));
@@ -50,6 +58,7 @@ int main(int argc, char **argv) {
         fclose(f); assert(!stat("stutter.1.jsonl", &st)); assert(st.st_size <= 8192);
     }
     unlink("stutter.jsonl"); unlink("stutter.1.jsonl"); unlink("performance-events.jsonl"); unlink("performance-events.1.jsonl");
+    unlink("performance-events.prev.jsonl"); unlink("performance-events.prev.1.jsonl");
     assert(!chdir("/tmp")); assert(!rmdir(dir)); puts("Bounded trace: enable/disable, concurrent producers, rotation, event journal and shutdown PASS");
     return 0;
 }

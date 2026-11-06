@@ -61,7 +61,8 @@ shader worker count applies to the before-gameplay path.
 
 **Measure current scene** records actual drawable presentation callbacks for
 30 seconds, including stalls, with a bounded buffer. It shows real FPS and P95
-separately from guest production. Suspension or a settings change invalidates the measurement. A stationary
+separately from guest production. Suspension, a manual settings change or an automatic
+quality change invalidates the measurement; wait for quality to settle before starting it. A stationary
 or menu sample does not certify a demanding world route. Use the
 [recorded A16 route](performance.md) for device comparisons.
 

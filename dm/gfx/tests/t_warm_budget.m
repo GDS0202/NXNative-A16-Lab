@@ -14,7 +14,10 @@ int main(void) { @autoreleasepool {
     NSArray *hot = nvn_warm_ranked(large, @[nvn_warm_digest(old), nvn_warm_digest(@"R\tstale"), nvn_warm_digest(stalled)], 2);
     assert(([hot isEqual:@[stalled, old]])); // Recent misses, not first-discovery order.
     NSArray *partial = nvn_warm_ranked(large, @[nvn_warm_digest(old)], 3);
-    assert(partial.count == 3 && [partial[0] isEqual:old]);
+    assert(([partial isEqual:@[old, @"R\t9998", @"R\t9999"]]));
+    NSArray *overlap = nvn_warm_ranked(large, @[nvn_warm_digest(@"R\t9999")], 3);
+    assert(([overlap isEqual:@[@"R\t9999", @"R\t9997", @"R\t9998"]]));
+    assert(([nvn_warm_recent(@"#comment\r\nS\ta\r\nC\tb\n", 2) isEqual:@[@"S\ta", @"C\tb"]]));
     assert(([nvn_warm_ranked(large, @[], 1024) isEqual:last]));
     puts("Learned prewarm budget: 10k records, stale hashes, recent runtime misses, bounded fallback PASS");
 } return 0; }

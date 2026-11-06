@@ -2,6 +2,8 @@
 
 ### Texture quality must preserve data sampler LOD
 
+- **Check:** `t_sampler_lod` exercises the production sampler creation and invalidation path, explicit reads at four mips in two array layers, Original/2x/1x/Original changes and fence-deferred old sampler retention. It requires a Metal device and reports SKIP explicitly when absent. Compilation, GPU execution, and BOTW character visuals remain distinct acceptance steps.
+
 - **Symptom:** a character becomes dark or incorrect after selecting non-original texture filtering, possibly while automatic texture quality is enabled.
 - **Cause:** the most aggressive global filter forced `lodMinClamp` to one on all mipmapped non-compare/non-reduction samplers. Metal applies this clamp even to explicit-level sampling, so texture-backed lighting/data can read the wrong mip. Sampler re-registration also released the previous sampler before already encoded GPU IDs necessarily finished using it. The supplied trace did not record the effective automatic filter, so the report for the middle preset is not fully explained by that trace alone.
 - **Fix:** filtering modes only cap eligible trilinear anisotropic samplers; all guest LOD clamps remain unchanged. Compare/reduction, low-anisotropy, nonmipmapped, biased and explicitly restricted samplers retain their original policy. Re-registration and quality changes retire old samplers after a GPU fence and invalidate descriptor/argument generations. Original remains the fallback for excluded samplers. This does not resize allocations or claim RAM savings.

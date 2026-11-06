@@ -22,7 +22,8 @@ See [live quality and the corrected report](live-quality.md).
    `stutter.1.jsonl` if present, `performance-events.jsonl`,
    `performance-events.1.jsonl` if present, and `capabilities.json` from Files > On My iPad > BOTW A16 Lab. That visible
    app folder already **is Documents**. Copy before the next launch: one previous
-   session's segments are kept as `stutter.prev.jsonl` / `stutter.prev.1.jsonl`. `log.txt` is useful for a crash or a
+   session's segments are kept as `stutter.prev.jsonl` / `stutter.prev.1.jsonl`, with journals
+   `performance-events.prev.jsonl` / `performance-events.prev.1.jsonl`. `log.txt` is useful for a crash or a
    rendering failure; never include games, saves or keys in a public report.
 4. On the Mac (Python only):
 
@@ -137,9 +138,9 @@ Do not delete saves or reinstall the app to create a cold texture cache.
 Two workers and a 1024 learned-record budget remain conservative experimental
 defaults. There is no evidence yet that four workers or an adaptive manager is
 better on this iPad. The new [automatic quality controller](live-quality.md) is explicitly opt-in
-and still needs paired device measurements; it does not change those worker defaults. Likewise, the current learned list retains newest
-first-discovered records, not measured most-used pipelines; usage-weighted
-preparation needs reuse/cost data before replacing that policy.
+and still needs paired device measurements; it does not change those worker defaults. The current learned ranking prioritizes recent runtime misses, then
+the newest remaining first-discovered records. This is not a measured frequency/cost predictor;
+usage-weighted preparation needs additional reuse/cost data.
 
 On a 60 Hz display, 30 and 60 fps have regular refresh divisors. A 25 fps cap
 cannot produce equally spaced refreshes on that display. Prefer a measured

@@ -151,7 +151,12 @@ void dm_tuning_tick(uint64_t now, double gpu, double frame, double compilation, 
         samples = good_windows = bad_windows = 0; window_start = now; state.status = DM_TUNE_SETTLING; last = now; goto done;
     }
     last = now;
-    if (!isfinite(gpu) || gpu <= 0 || !isfinite(frame) || frame <= 0) { state.status = DM_TUNE_NO_GPU; goto done; }
+    if (!isfinite(gpu) || gpu <= 0 || !isfinite(frame) || frame <= 0) {
+        // Unknown samples must break a sustained-overload/headroom decision;
+        // combining windows from opposite sides of a gap can oscillate quality.
+        samples = good_windows = bad_windows = 0; window_start = now;
+        state.status = DM_TUNE_NO_GPU; goto done;
+    }
     gpu_samples[samples] = gpu; frame_samples[samples++] = frame;
     if (samples < 120 && (now - window_start < 1000000000ull || samples < 20)) goto done;
     double g = percentile(gpu_samples, samples, .90), f = percentile(frame_samples, samples, .50);
@@ -173,6 +178,7 @@ void dm_tuning_tick(uint64_t now, double gpu, double frame, double compilation, 
             state.far_clip = clip > 10000 ? 10000 : clip - 1000;
             if (state.far_clip < limit) state.far_clip = limit;
         } else { state.status = DM_TUNE_FLOOR; goto done; }
+        if (state.measuring) cancel_measurement();
         last_change = now; good_windows = bad_windows = 0; state.changes++; apply();
     } else if (good_windows >= 5 && now - last_change >= 5000000000ull) {
         // Restore visibility and texture quality before increasing scene resolution.
@@ -185,6 +191,7 @@ void dm_tuning_tick(uint64_t now, double gpu, double frame, double compilation, 
         else if (state.texture > state.requested.texture) state.texture--;
         else if (state.scale < ((state.capabilities & DM_TUNE_FULL_SCALE) ? 100 : 95)) state.scale += 5;
         else goto done;
+        if (state.measuring) cancel_measurement();
         last_change = now; good_windows = bad_windows = 0; state.changes++; apply();
     }
 done:

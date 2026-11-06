@@ -8,10 +8,14 @@ enum { NVN_MEM_OK, NVN_MEM_OS_CRITICAL, NVN_MEM_HEADROOM_CRITICAL,
        NVN_MEM_HEADROOM_LOW, NVN_MEM_OS_WARN, NVN_MEM_RECOVERING };
 typedef struct {
     int level, pressure, reason;
-    uint64_t calm_since;
+    uint64_t calm_since, last_sample;
 } nvn_memory;
 
 static inline void nvn_memory_sample(nvn_memory *s, uint64_t now, uint64_t left, int event) {
+    // A suspended process has not observed a continuous safe interval. Do not
+    // count a long timer gap or a clock rollback as time spent in recovery.
+    if (s->last_sample && (now < s->last_sample || now - s->last_sample > 2000000000ull)) s->calm_since = 0;
+    s->last_sample = now;
     if (event != NVN_MEM_POLL) {
         s->pressure = event == NVN_MEM_CRITICAL ? 2 : event == NVN_MEM_WARN ? 1 : 0;
         if (s->pressure) s->calm_since = 0;

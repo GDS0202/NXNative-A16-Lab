@@ -147,6 +147,39 @@ CPU readback/transcode in the frame loop would introduce a new stall and is
 not enabled as a speed fix. The logs establish declined attachments, not the
 visible extent of their effect on characters or frame pacing.
 
+The follow-up traced the ownership boundary through `tex_mtl`, software-BC upload,
+`bcrt_view` / `bcrt_attach`, `bcrt_flush` and descriptor resolution. The native-BC
+shadow assumes backing texels still contain the original encoded blocks. R8
+decoding and BC-to-ASTC conversion lose that representation; it cannot safely be
+reconstructed by copying bytes back out of the sampled texture. A complete
+bridge must retain encoded block storage per mip/layer/depth plane, initialize
+partial writes, synchronize CPU dirty uploads and GPU block writes, provide
+encoded-format aliases to consumers, then GPU-decode/transcode into the sampled
+backing before its next read. ASTC-backed formats also need an appropriate GPU
+encoder; BC4/BC5 decoders alone cannot solve them. The existing CPU-content cache
+does not establish GPU-write coherence. These representation/lifetime hooks and
+their round-trip tests remain missing; no incomplete bridge is enabled. The
+source review is concrete, but it is not a completed rendering correction.
+
+## Follow-up audit after 2ad9a10b
+
+The next candidate preserves that verified tree and adds:
+
+- Recovery timing that resets across suspension/large timer gaps and clock rollback.
+- Rejection of quality decisions assembled across missing GPU observations.
+- Invalidation of scene measurements when automatic quality changes mid-sample.
+- Preservation of both segments of the previous state journal.
+- A recency-only index with drained scan temporaries, and a correction that keeps
+  the newest fallback records when hot records consume part of the learned budget.
+- A real Metal sampler regression fixture for four explicit mips, two array layers,
+  quality round trips, descriptor invalidation and fence-retired old states.
+
+Portable transition and measurement tests pass locally under ASan/UBSan. Mac
+compilation, ranked-selection tests and GPU execution are reported separately
+in the PR checks; no new A16 performance or picture result is inferred. The
+Codemagic builder is prepared separately in the private repository and must use
+the final source SHA, existing owned inputs and unchanged integrity/build gates.
+
 `kCFRunLoopCommonModes` is reported during startup. Repository calls were searched;
 the host does not call `CFRunLoopRunSpecific`/`CFRunLoopRunInMode` with that pseudo-mode.
 Using CommonModes to schedule an input source is valid and is not evidence of

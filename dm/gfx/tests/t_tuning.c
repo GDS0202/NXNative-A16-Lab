@@ -56,6 +56,10 @@ int main(void) {
     frames(900, 24, 25, 4); assert(dm_tuning_read().scale == 100); // compilation spikes are not GPU pressure
     frames(900, -1, 25, 0); assert(dm_tuning_read().scale == 100);
 
+    init(); assert(dm_tuning_set("DM_AUTO_QUALITY", 1));
+    frames(50, 24, 25, 0); frames(1, NAN, 25, 0); frames(50, 24, 25, 0);
+    assert(dm_tuning_read().scale == 100); // Unknown GPU time breaks consecutive overload evidence.
+
     init(); assert(dm_tuning_set("DM_AUTO_QUALITY", 1)); frames(1200, 24, 25, 0);
     dm_tuning_system(1100000000, 2, 0); frames(1200, 8, 16.666667, 0); assert(dm_tuning_read().scale == 80);
     dm_tuning_system(1100000000, 0, 0); frames(1800, 8, 16.666667, 0); assert(dm_tuning_read().scale == 100);
@@ -82,6 +86,12 @@ int main(void) {
     dm_tuning_measure(); dm_tuning_present(stamp); dm_tuning_boundary(); assert(!dm_tuning_read().measuring && !dm_tuning_read().measured_complete);
     dm_tuning_measure(); dm_tuning_present(stamp); assert(dm_tuning_set("DM_TEXTURE_DETAIL", 1));
     assert(!dm_tuning_read().measuring && !dm_tuning_read().measured_complete && !dm_tuning_read().measured_frames);
+
+    init(); assert(dm_tuning_set("DM_AUTO_QUALITY", 1));
+    dm_tuning_measure(); dm_tuning_present(now); frames(1200, 24, 25, 0);
+    assert(dm_tuning_read().scale == 80 && !dm_tuning_read().measuring && !dm_tuning_read().measured_complete);
+    dm_tuning_measure(); dm_tuning_present(now); frames(1800, 8, 16.666667, 0);
+    assert(dm_tuning_read().scale == 100 && !dm_tuning_read().measuring && !dm_tuning_read().measured_complete);
 
     init(); dm_tuning_init(NULL, 0, 0, 0); assert(!dm_tuning_set("DM_AUTO_QUALITY", 1));
     assert(!dm_tuning_set("DM_VIEW_DISTANCE", 1000));

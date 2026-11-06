@@ -2,6 +2,8 @@
 
 ### Fragmented pipeline archive hits can stall
 
+- **Follow-up:** learned ranking scans lines with drained transient allocations and indexes only the bounded recency set, rather than copying/indexing the entire learned file. When recent misses consume part of the budget, fallback keeps the newest remaining discovery records. The selected records retain normal descriptor/build validation; no archive eligibility or crash marker is relaxed.
+
 - **Symptom:** long frames report pipeline/library creation time even when the timing summary shows zero newly compiled bases and successful archive lookups.
 - **Cause:** the hybrid path searched all native-layout run archives synchronously before trying its prepared pulling variant. Cache presence did not bound the cost of finding a pipeline. The existing compaction recovery guard can legitimately preserve many files after an interrupted or failed Metal serialization.
 - **Fix:** with a matching bundled archive and more than eight run files, `DM_PSO_ARCH_ASYNC=1` first tries a cached/bundled pulling base without scanning run files or compiling a base. A successful compatible variant renders while the existing bounded queue loads the native layout. A failed quick probe preserves the original complete fallback; no draw is skipped. `DM_PSO_ARCH_ASYNC=0` restores the previous lookup order. A bounded shader-pair hint also reorders run-file searches, with every archive still eligible exactly once on a miss.

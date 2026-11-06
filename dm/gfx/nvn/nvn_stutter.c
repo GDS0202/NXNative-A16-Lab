@@ -139,7 +139,8 @@ static void initialize(void) {
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); session = (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec;
     unlink("stutter.prev.1.jsonl"); rename("stutter.1.jsonl", "stutter.prev.1.jsonl");
     rename("stutter.jsonl", "stutter.prev.jsonl");
-    rename("performance-events.jsonl", "performance-events.prev.jsonl"); unlink("performance-events.1.jsonl");
+    unlink("performance-events.prev.1.jsonl"); rename("performance-events.1.jsonl", "performance-events.prev.1.jsonl");
+    rename("performance-events.jsonl", "performance-events.prev.jsonl");
     output = open_file("stutter.jsonl");
     if (!output) { free(queue); queue = NULL; atomic_store(&mode, 0); return; }
     header(output, 0, 0);

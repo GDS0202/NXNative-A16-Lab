@@ -2,6 +2,8 @@
 
 ### Memory pressure cap recovery
 
+- **Follow-up:** the safe interval requires continuous observations; a timer gap over two seconds or a clock rollback resets recovery. Time spent suspended cannot release the cap immediately on foregrounding. `t_memory` covers this and 50,000 mixed pressure/headroom transitions. Automatic-quality evidence also resets on unknown GPU samples; a measurement interrupted by an automatic quality change is invalidated, just as for a manual change. Both current and rotated previous-session state journals are preserved on restart.
+
 - **Symptom:** `frame step cap 60` changes to 30 after `critical memory pressure from the system`, even with `DM_FPS_HOLD=off`, and never recovers.
 - **Cause:** process headroom is not the system pressure level. The old guard subscribed to WARN/CRITICAL without NORMAL, and required more than 1 GiB headroom for 15 seconds to recover. A steady workload could remain below that exit threshold indefinitely. It also ignored zero available bytes on iOS. Late-frame hold, movie/VFR policy, memory and thermal caps are separate mechanisms.
 - **Fix:** `nvn_memory.h` keeps OS pressure and headroom separate. Subscribe to NORMAL too; critical pressure or less than 300 MiB enters level 2; less than 600 MiB enters level 1. After OS normal, at least 768 MiB for 10 seconds releases the cap, with a lower intermediate level and renewed-pressure hysteresis. A healthy WARN pauses optional work without immediately forcing a new cap. Zero bytes is critical. Real continued pressure still holds 30. This is a policy correction, not proof that 60 is safe in every scene.
