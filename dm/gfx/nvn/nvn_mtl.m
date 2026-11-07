@@ -3765,13 +3765,18 @@ static void shmap_load(void) {
     int gs_loc, lay_loc; char gs_comp, lay_comp;   // a slice-writing geometry shader (no function: the layer comes from input gs_loc.gs_comp) / a vertex shader with layer entry points writing output lay_loc.lay_comp (dmsh_build.py gs_slice, vs_layer_entry); -1 = none
     // The argument buffer encoded last time
     id<MTLBuffer> ab_buf; uint64_t ab_gpu; size_t ab_off; uint64_t ab_pass; uint32_t ab_binst;   // ab_pass: serial of the render pass that encoded this argument block - reused only within the same pass (the arena holding a block from another pass / another submission may already have been reclaimed and rewritten)
-    id<MTLLibrary> bflib; int bflib_tried; NSMutableDictionary<NSString *, id<MTLFunction>> *bffn;   // bflib: readable-tile version <key>_bf (merge B step 2)
+    id<MTLLibrary> bflib; int bflib_state; NSMutableArray *bffn;   // bflib: readable-tile version <key>_bf (merge B step 2)
     uint64_t mis[4];   // mis: texture slots 0-255 already reported for a type mismatch (tex_mis_note)
     NSString *ventry; id<MTLFunction> vfn; int vfn_state;
     id<MTLFunction> pfn; int pfn_state, has_pull; } @end   // pfn: the same entry of the pulling library <key>_bp (pull_fn; has_pull: the reflection names one, dmsh_pull.py)   // vertex: the entry point loaded (by the depth mode); vfn: the same entry of the shadow-input library <key>_bv (vin_fn; state 0 untried, 1 loaded, 2 failed)
 @implementation NvShader
 - (void)dealloc { free(rf.c1); free(geo_slot); }
 @end
+// Numeric specialization keys avoid per-draw string construction. Retain the
+// complete constants, including redirections and attachment mapping.
+typedef struct { int8_t fx[32]; uint8_t fbmask, lmap[8]; } bf_key;
+@interface NvBfFn : NSObject { @public bf_key k; id<MTLFunction> fn; } @end
+@implementation NvBfFn @end
 #include "nvn_pso_skey.h"
 #include "nvn_geometry.h"
 #include "nvn_feedback.h"
@@ -5358,9 +5363,7 @@ static MTLBlendOperation bop(int e) { switch (e) { case 2: return MTLBlendOperat
 
 // Pipeline: cached by (program, target formats, blend / write mask, vertex layout, sample count)
 static const uint8_t *g_pso_lmap; static id<MTLFunction> g_pso_fsfn; static pso_fz_desc g_pso_fz, g_fz_desc;
-static os_unfair_lock g_fz_fn_lock = OS_UNFAIR_LOCK_INIT;
-static NSMutableDictionary<NSString *, id<MTLFunction>> *g_bf_fn_cache;
-static NSMutableDictionary<NSString *, id<MTLLibrary>> *g_bf_lib_cache;
+static os_unfair_lock g_fz_fn_lock = OS_UNFAIR_LOCK_INIT; // shader-local numeric cache shared by submit and prewarm
 static nvn_hmap g_pso = {.klen = sizeof(pso_key)}, g_dss;
 static nvn_hmap g_pso_fail = {.klen = sizeof(pso_key)};   // pipelines that failed to build: remembered and never retried (previously every draw recompiled it, over 10,000 times in one iPhone session)
 static const char g_tf_mark, g_amp_mark, g_discard_mark;
@@ -8398,31 +8401,46 @@ planned:
     if (!g_fz_n++) MLOG("readable-tile pass merge: first case pass %llu (%d physical attachments)", g_stat_pass + 1, n);
     PD("F %llu merge with the next pass (readable tile): physical attachments %d, previous pass %d", g_stat_pass + 1, n, R.rt.n == n ? g_fz.n1 : g_fz.n1);
 }
-static id<MTLFunction> bf_fn(NvShader *fs, const int *fx, uint8_t fbmask, const uint8_t *lmap) {   // The readable tile version is specialized by constants (cached)
+// The readable-tile version of a shader is looked up by numeric constants:
+// BOTW asks for hundreds of tile-reading draws per frame (upstream PR #1161).
+static id<MTLFunction> bf_fn(NvShader *fs, const int *fx, uint8_t fbmask, const uint8_t *lmap) {
+    int nfc = fs->rf.nfc < 32 ? fs->rf.nfc : 32;
+    bf_key key; memset(&key, 0, sizeof key);
+    for (int j = 0; j < nfc; j++) key.fx[j] = (int8_t)fx[j];
+    key.fbmask = fbmask; memcpy(key.lmap, lmap, sizeof key.lmap);
     os_unfair_lock_lock(&g_fz_fn_lock);
-    if (!g_bf_fn_cache) { g_bf_fn_cache = [NSMutableDictionary dictionary]; g_bf_lib_cache = [NSMutableDictionary dictionary]; }
-    size_t kl = strlen(fs->key); NSString *base = [NSString stringWithFormat:@"%.*s", (int)(kl > 2 ? kl - 2 : kl), fs->key];
-    id<MTLLibrary> lib = g_bf_lib_cache[base];
-    if (!lib) {
-        NSError *e = nil; NSString *path = [NSString stringWithFormat:@"%@/%@_bf.metallib", g_msl_dir, base];
-        lib = lib_from_file(path, &e);
-        if (!lib) MLOG("[RED] failed to load the readable-tile version %s: %s", path.UTF8String, e.localizedDescription.UTF8String);
-        else g_bf_lib_cache[base] = lib;
+    for (NvBfFn *entry in fs->bffn) if (!memcmp(&entry->k, &key, sizeof key)) {
+        id<MTLFunction> result = entry->fn;
+        os_unfair_lock_unlock(&g_fz_fn_lock);
+        return result;
     }
+    if (!fs->bflib_state) {
+        size_t kl = strlen(fs->key); NSError *e = nil;
+        NSString *path = [NSString stringWithFormat:@"%@/%.*s_bf.metallib",
+                           g_msl_dir, (int)(kl > 2 ? kl - 2 : kl), fs->key];
+        fs->bflib = lib_from_file(path, &e);
+        fs->bflib_state = fs->bflib ? 1 : 2;
+        if (!fs->bflib) MLOG("[RED] failed to load the readable-tile version %s: %s",
+                            path.UTF8String, e.localizedDescription.UTF8String);
+    }
+    id<MTLLibrary> lib = fs->bflib;
     if (!lib) { os_unfair_lock_unlock(&g_fz_fn_lock); return nil; }
-    NSMutableString *k = [NSMutableString stringWithFormat:@"%02x", fbmask];
-    for (int i = 0; i < fs->rf.nfc; i++) [k appendFormat:@",%d", fx[i]];
-    for (int j = 0; j < 8; j++) [k appendFormat:@"/%02x", lmap[j]];
-    NSString *cacheKey = [NSString stringWithFormat:@"%@|%@", base, k];
-    id<MTLFunction> f = g_bf_fn_cache[cacheKey];
-    if (f) { os_unfair_lock_unlock(&g_fz_fn_lock); return f; }
     MTLFunctionConstantValues *cv = [MTLFunctionConstantValues new];
-    for (int i = 0; i < fs->rf.nfc; i++) { int v = fx[i]; [cv setConstantValue:&v type:MTLDataTypeInt atIndex:(NSUInteger)i]; }
+    for (int j = 0; j < nfc; j++) { int v = fx[j]; [cv setConstantValue:&v type:MTLDataTypeInt atIndex:(NSUInteger)j]; }
     for (int q = 0; q < 8; q++) { bool b = fbmask >> q & 1; [cv setConstantValue:&b type:MTLDataTypeBool atIndex:(NSUInteger)(32 + q)]; }
-    for (int j = 0; j < fs->rf.nfo; j++) for (int q = 0; q < 8; q++) { bool b = lmap[q] == fs->rf.fo_color[j]; [cv setConstantValue:&b type:MTLDataTypeBool atIndex:(NSUInteger)(64 + 8 * j + q)]; }
-    NSError *e = nil; f = fn4_note([lib newFunctionWithName:@"main0" constantValues:cv error:&e], lib, @"main0", cv);
-    if (!f) { MLOG("[RED] readable-tile version specialization failed %s (%s): %s", fs->key, k.UTF8String, e.localizedDescription.UTF8String); os_unfair_lock_unlock(&g_fz_fn_lock); return nil; }
-    g_bf_fn_cache[cacheKey] = f; os_unfair_lock_unlock(&g_fz_fn_lock); return f;
+    for (int j = 0; j < fs->rf.nfo; j++) for (int q = 0; q < 8; q++) {
+        bool b = lmap[q] == fs->rf.fo_color[j];
+        [cv setConstantValue:&b type:MTLDataTypeBool atIndex:(NSUInteger)(64 + 8 * j + q)];
+    }
+    NSError *e = nil;
+    id<MTLFunction> result = fn4_note([lib newFunctionWithName:@"main0" constantValues:cv error:&e], lib, @"main0", cv);
+    if (!result) MLOG("[RED] readable-tile specialization failed %s (mask %02x): %s",
+                      fs->key, fbmask, e.localizedDescription.UTF8String);
+    NvBfFn *entry = [NvBfFn new]; entry->k = key; entry->fn = result;
+    if (!fs->bffn) fs->bffn = [NSMutableArray array];
+    [fs->bffn addObject:entry]; // Remember failures as well as successes.
+    os_unfair_lock_unlock(&g_fz_fn_lock);
+    return result;
 }
 static int ubo_float(int slot, uint16_t ref, float *out) {   // Component cmp of vector vec of the uniform slot (read on the CPU side; not read if it falls within a buffer write pending execution in this submit)
     int sl = ref >> 8, vec = ref >> 2 & 63, cmp = ref & 3;
