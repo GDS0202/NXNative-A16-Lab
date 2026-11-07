@@ -5477,7 +5477,8 @@ static os_unfair_lock g_fz_fn_lock = OS_UNFAIR_LOCK_INIT; // shader-local numeri
 static nvn_hmap g_pso = {.klen = sizeof(pso_key)}, g_dss;
 static nvn_hmap g_pso_fail = {.klen = sizeof(pso_key)};   // NSNull: permanent failure; NSNumber: one memory-pressure recovery retry.
 static uint64_t g_pso_retry_attempts, g_pso_retry_recovered;
-static int pso_fail_skip(const pso_key *key) {
+static int pso_fail_skip(const pso_key *key, int *retry_now) {
+    if (retry_now) *retry_now = 0;
     id failed = hm_get_id(&g_pso_fail, key);
     if (!failed) return 0;
     if (![failed isKindOfClass:NSNumber.class]) return 1;
@@ -5487,6 +5488,7 @@ static int pso_fail_skip(const pso_key *key) {
     // again, the permanent sentinel keeps draw-time retries bounded.
     hm_put_id(&g_pso_fail, key, NSNull.null);
     g_pso_retry_attempts++;
+    if (retry_now) *retry_now = 1;
     return 0;
 }
 static void pso_fail_record(const pso_key *key) {
@@ -6469,7 +6471,7 @@ static __unsafe_unretained id<MTLRenderPipelineState> pso_get_(NvProg *pr, MTLRe
         k.fsfn = DISCARD_MARK;
         id<MTLRenderPipelineState> cached = hm_get_id(&g_pso, &k);
         if (cached) return cached;
-        if (pso_fail_skip(&k)) return nil;
+        if (pso_fail_skip(&k, NULL)) return nil;
         NSError *error = nil;
         id<MTLRenderPipelineState> ps = pso_build(pso_desc(&k, vs, nil, nil, 0), &error);
         if (ps) { hm_put_id(&g_pso, &k, ps); hm_del_id(&g_pso_fail, &k); }
@@ -6484,11 +6486,14 @@ static __unsafe_unretained id<MTLRenderPipelineState> pso_get_(NvProg *pr, MTLRe
       if (all && !g_pso_lmap && !ms_fn && hybrid_on()) { __unsafe_unretained id<MTLRenderPipelineState> h = hybrid_get(&k, vs, fs); if (h) { g_pso_pull = 1; return h; } } }
     __unsafe_unretained id<MTLRenderPipelineState> cached = hm_get_id(&g_pso, &k);
     if (cached) return cached;
-    if (pso_fail_skip(&k)) return nil;
+    int retry_now = 0;
+    if (pso_fail_skip(&k, &retry_now)) return nil;
     id<MTLRenderPipelineState> ps = nil; int took = 0;
     NSError *e = nil; uint64_t bt = bp_now(), pred0 = g_pt_pred_ns;
     g_pso_pull = 0; int why = g_pso_lmap ? 1 : ms_fn ? 2 : 0;
-    if (!took && !g_pso_lmap && !ms_fn && hybrid_on()) {
+    // A recovered PSO must actually be requested. A pulling stand-in can
+    // return early without trying the failed native pipeline at all.
+    if (!retry_now && !took && !g_pso_lmap && !ms_fn && hybrid_on()) {
         why = !vs->has_pull || vs->layer_out ? 3 : 4;
         int st = pso_pend_try(&k, &ps);
         if (st == 2) took = 1;   // built in the background (nil: it failed, and is built again below for its message)
