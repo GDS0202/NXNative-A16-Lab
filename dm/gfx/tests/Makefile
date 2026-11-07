@@ -79,6 +79,8 @@ t_tuning: t_tuning.c ../nvn/nvn_tuning.c ../nvn/nvn_tuning.h
 	clang -O1 -g -Wall -pthread -o $@ t_tuning.c ../nvn/nvn_tuning.c
 t_memory: t_memory.c ../nvn/nvn_memory.h
 	clang $(CFLAGS) -o $@ t_memory.c
+t_pretrim: t_pretrim.c ../nvn/nvn_pretrim.h
+	clang $(CFLAGS) -o $@ t_pretrim.c
 t_sbw_range: t_sbw_range.c ../nvn/nvn_sbw_range.h
 	clang $(CFLAGS) -o $@ t_sbw_range.c
 t_upload_window: t_upload_window.c ../nvn/nvn_upload_window.h
