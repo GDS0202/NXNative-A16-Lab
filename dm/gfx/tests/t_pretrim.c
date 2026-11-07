@@ -19,7 +19,8 @@ int main(void) {
     assert(sample(&p, 16, 1500, 1)); // OS warning/critical: immediate.
     assert(sample(&p, 17, 1500, 0));
     assert(sample(&p, 25, 1500, 0)); // Long background gap is not observed recovery.
-    for (unsigned i = 26; i <= 33; i++) assert(sample(&p, i, 1500, 0));
+    for (unsigned i = 26; i <= 32; i++) assert(sample(&p, i, 1500, 0));
+    assert(!sample(&p, 33, 1500, 0)); // Eight observed seconds after the gap.
     assert(!sample(&p, 34, 1500, 0));
     assert(!sample(&p, 40, 950, 0));
     assert(!sample(&p, 39, 950, 0)); // Clock rollback resets the trend.
