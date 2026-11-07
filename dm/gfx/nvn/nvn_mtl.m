@@ -39,6 +39,7 @@
 #include "nvn_tuning.h"
 #include "nvn_memory.h"
 #include "nvn_pretrim.h"
+#include "nvn_pso_retry.h"
 #include "nvn_sbw_range.h"
 #include "nvn_upload_window.h"
 #include "nvn_sampler_quality.h"
@@ -5474,7 +5475,27 @@ static MTLBlendOperation bop(int e) { switch (e) { case 2: return MTLBlendOperat
 static const uint8_t *g_pso_lmap; static id<MTLFunction> g_pso_fsfn; static pso_fz_desc g_pso_fz, g_fz_desc;
 static os_unfair_lock g_fz_fn_lock = OS_UNFAIR_LOCK_INIT; // shader-local numeric cache shared by submit and prewarm
 static nvn_hmap g_pso = {.klen = sizeof(pso_key)}, g_dss;
-static nvn_hmap g_pso_fail = {.klen = sizeof(pso_key)};   // pipelines that failed to build: remembered and never retried (previously every draw recompiled it, over 10,000 times in one iPhone session)
+static nvn_hmap g_pso_fail = {.klen = sizeof(pso_key)};   // NSNull: permanent failure; NSNumber: one memory-pressure recovery retry.
+static uint64_t g_pso_retry_attempts, g_pso_retry_recovered;
+static int pso_fail_skip(const pso_key *key) {
+    id failed = hm_get_id(&g_pso_fail, key);
+    if (!failed) return 0;
+    if (![failed isKindOfClass:NSNumber.class]) return 1;
+    int pressure = atomic_load(&g_mem_level) || atomic_load(&g_mem_pressure);
+    if (!nvn_pso_retry_due(bp_now(), [(NSNumber *)failed unsignedLongLongValue], pressure)) return 1;
+    // Exhaust the single retry *before* attempting a new build. If it fails
+    // again, the permanent sentinel keeps draw-time retries bounded.
+    hm_put_id(&g_pso_fail, key, NSNull.null);
+    g_pso_retry_attempts++;
+    return 0;
+}
+static void pso_fail_record(const pso_key *key) {
+    if (hm_get_id(&g_pso_fail, key)) return; // Failed the permitted retry.
+    uint64_t due = nvn_pso_retry_deadline(bp_now(),
+        atomic_load(&g_mem_level) || atomic_load(&g_mem_pressure));
+    hm_put_id(&g_pso_fail, key, due ? @(due) : NSNull.null);
+}
+
 static const char g_tf_mark, g_amp_mark, g_discard_mark;
 static char g_geo_mark;
 #define GEO_MARK ((const void *)&g_geo_mark)
@@ -6448,11 +6469,11 @@ static __unsafe_unretained id<MTLRenderPipelineState> pso_get_(NvProg *pr, MTLRe
         k.fsfn = DISCARD_MARK;
         id<MTLRenderPipelineState> cached = hm_get_id(&g_pso, &k);
         if (cached) return cached;
-        if (hm_get_id(&g_pso_fail, &k)) return nil;
+        if (pso_fail_skip(&k)) return nil;
         NSError *error = nil;
         id<MTLRenderPipelineState> ps = pso_build(pso_desc(&k, vs, nil, nil, 0), &error);
-        if (ps) hm_put_id(&g_pso, &k, ps);
-        else { MLOG("[RED] rasterizer-discard pipeline (vertex %s): %s", vs->key, error.localizedDescription.UTF8String); hm_put_id(&g_pso_fail, &k, NSNull.null); }
+        if (ps) { hm_put_id(&g_pso, &k, ps); hm_del_id(&g_pso_fail, &k); }
+        else { MLOG("[RED] rasterizer-discard pipeline (vertex %s): %s", vs->key, error.localizedDescription.UTF8String); pso_fail_record(&k); }
         return ps;
     }
     if (g_pso_lmap) { memcpy(k.lmap, g_pso_lmap, 8); k.fsfn = (__bridge void *)g_pso_fsfn; }
@@ -6463,7 +6484,7 @@ static __unsafe_unretained id<MTLRenderPipelineState> pso_get_(NvProg *pr, MTLRe
       if (all && !g_pso_lmap && !ms_fn && hybrid_on()) { __unsafe_unretained id<MTLRenderPipelineState> h = hybrid_get(&k, vs, fs); if (h) { g_pso_pull = 1; return h; } } }
     __unsafe_unretained id<MTLRenderPipelineState> cached = hm_get_id(&g_pso, &k);
     if (cached) return cached;
-    if (hm_get_id(&g_pso_fail, &k)) return nil;
+    if (pso_fail_skip(&k)) return nil;
     id<MTLRenderPipelineState> ps = nil; int took = 0;
     NSError *e = nil; uint64_t bt = bp_now(), pred0 = g_pt_pred_ns;
     g_pso_pull = 0; int why = g_pso_lmap ? 1 : ms_fn ? 2 : 0;
@@ -6511,11 +6532,18 @@ static __unsafe_unretained id<MTLRenderPipelineState> pso_get_(NvProg *pr, MTLRe
     }
     g_bp_pso_n++; g_bp_pso_ns += bp_now() - bt;
     if (!ps) { char hint[200]; MLOG("[RED] failed to create render pipeline (vertex %s fragment %s): %s%s", vs->key, fs ? fs->key : "-", e.localizedDescription.UTF8String, pso_fout_hint(fs, g_pass.cfmt, hint, sizeof hint));
-               hm_put_id(&g_pso_fail, &k, NSNull.null); return nil; }
+               pso_fail_record(&k); return nil; }
     if (!ms_fn) { pso_skey sk; char shex[sizeof sk * 2 + 1]; pso_skey_from(&k, vs, fs, g_pso_lmap != NULL, g_pso_lmap ? &g_pso_fz : NULL, &sk); pso_skey_hex(&sk, shex);
         pso_record("R\t%s\n", shex);
         pso_user_record("R\t%s\n", shex); }
     hm_put_id(&g_pso, &k, ps);
+    if (hm_get_id(&g_pso_fail, &k)) {
+        hm_del_id(&g_pso_fail, &k);
+        g_pso_retry_recovered++;
+        MLOG("render pipeline recovered after memory pressure (%llu recovered of %llu attempted): %s/%s",
+             (unsigned long long)g_pso_retry_recovered, (unsigned long long)g_pso_retry_attempts,
+             vs->key, fs ? fs->key : "-");
+    }
     // Metal may serialize requests internally. Submit the pipeline needed now before speculative work, and preserve record-on-use above.
     static int predict = -1; if (predict < 0) { const char *e = getenv("DM_NVN_PREDICT"); predict = !(e && !strcmp(e, "0")); if (!predict) MLOG("DM_NVN_PREDICT=0: no parallel precompile prediction"); }
     if (predict && g_pp_submit_mark != g_sub_serial) {
