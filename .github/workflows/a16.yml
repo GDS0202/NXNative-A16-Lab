@@ -35,6 +35,8 @@ jobs:
           /tmp/memory
           clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_pretrim.c -o /tmp/pretrim
           /tmp/pretrim
+          clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_sbw_sparse.c -o /tmp/sbw-sparse
+          /tmp/sbw-sparse
           clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_pso_retry.c -o /tmp/pso-retry
           /tmp/pso-retry
           clang -O2 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_sbw_range.c -o /tmp/sbw-range

@@ -41,6 +41,7 @@
 #include "nvn_pretrim.h"
 #include "nvn_pso_retry.h"
 #include "nvn_sbw_range.h"
+#include "nvn_sbw_sparse.h"
 #include "nvn_upload_window.h"
 #include "nvn_sampler_quality.h"
 #include "nvn_archive_route.h"
@@ -828,11 +829,16 @@ static upd_ent g_upd[PEND_MAX]; static int g_nupd;
 // wrote them. A counter report does not count against this submission's shadows: the host writes reports on the CPU when the whole submission has completed, so no draw of it reads one
 // (Fire Emblem Engage writes its query reports into the page of a uniform block); it counts for later submissions while this one runs (gw_commit)
 enum { SBW_N = 16384, SBW_PAGES = 4096 };
-static struct { uint64_t page, gpu_mask[4]; uint32_t gen; uint8_t src; } g_sbwp[SBW_N]; static int g_nsbw, g_sbw_over;   // src: SBW_* bits; pages in the set this submission; over: a write could not be kept (too large, set full, size not known)
+static nvn_sbw_page g_sbwp[SBW_N];
+static uint16_t g_sbw_active[SBW_N]; // hash slot for each registered page, bounded by SBW_N.
+static int g_nsbw, g_sbw_over;   // src: SBW_* bits; pages in the set this submission; over: a write could not be kept (too large, set full, size not known)
 static int sbw_slot(uint64_t pg, int add) {   // open addressing; −1 = not there (or no room to add)
     unsigned h = (unsigned)((pg * 0x9E3779B97F4A7C15ull) >> 50) & (SBW_N - 1);
     for (int i = 0; i < 64; i++, h = (h + 1) & (SBW_N - 1)) {
-        if (g_sbwp[h].gen != g_pend_gen) { if (!add) return -1; g_sbwp[h].page = pg; g_sbwp[h].gen = g_pend_gen; g_sbwp[h].src = 0; memset(g_sbwp[h].gpu_mask, 0, sizeof g_sbwp[h].gpu_mask); g_nsbw++; return (int)h; }
+        if (g_sbwp[h].gen != g_pend_gen) { if (!add) return -1; g_sbwp[h].page = pg; g_sbwp[h].gen = g_pend_gen; g_sbwp[h].src = 0; memset(g_sbwp[h].gpu_mask, 0, sizeof g_sbwp[h].gpu_mask);
+            // One registration per active hash slot; reset via g_nsbw at submission start.
+            g_sbw_active[g_nsbw++] = (uint16_t)h;
+            return (int)h; }
         if (g_sbwp[h].page == pg) return (int)h; }
     return -1;
 }
@@ -881,6 +887,13 @@ static int sbw_hits(uint64_t lo, uint64_t hi) {
     if (fine < 0) { const char *e = getenv("DM_NVN_SBW_FINE"); fine = !e || atoi(e); }
     uint64_t last = hi - 1;
     int shared_page = 0;
+    if (nvn_sbw_sparse_worthwhile(lo, hi, (unsigned)g_nsbw)) {
+        int hit = nvn_sbw_sparse_hits(g_sbwp, g_sbw_active, (unsigned)g_nsbw,
+                                      lo, hi, fine, &shared_page);
+        if (fine && shared_page)
+            atomic_fetch_add_explicit(&g_sbw_diag[hit ? SBW_D_OVERLAP : SBW_D_DISJOINT], 1, memory_order_relaxed);
+        return hit;
+    }
     for (uint64_t pg = lo >> 12; pg <= last >> 12; pg++) {
         int k = sbw_slot(pg, 0);
         if (k >= 0 && (g_sbwp[k].src & SBW_GPU)) {
