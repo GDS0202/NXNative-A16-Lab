@@ -1360,7 +1360,14 @@ static void gw_commit(uint64_t fence) {
     uint64_t done = g_done;
     if ((g_pend_over || g_sbw_over) && fence > g_gw_all) g_gw_all = fence;
     for (int e = 0; e < g_npend; e++) gw_put(g_pend_lo[e], g_pend_hi[e], fence, done);
-    if (g_nsbw) for (int i = 0; i < SBW_N; i++) if (g_sbwp[i].gen == g_pend_gen) gw_put(g_sbwp[i].page << 12, (g_sbwp[i].page + 1) << 12, fence, done);
+    // The active-slot list is built alongside the hash table and reset at
+    // each submission. Unlike scanning all 16,384 slots, this touches only
+    // pages actually registered as written or reported, with identical
+    // fence and alias-collision handling in gw_put().
+    for (int i = 0; i < g_nsbw; i++) {
+        const nvn_sbw_page *p = &g_sbwp[g_sbw_active[i]];
+        gw_put(p->page << 12, (p->page + 1) << 12, fence, done);
+    }
 }
 // The writes queued in this submission from index since on that overlap [a, b), newest first, into out (room for every entry a lookup can meet); -1 when they cannot all be told
 static int pend_since(uint64_t a, uint64_t b, int since, int *out) {
