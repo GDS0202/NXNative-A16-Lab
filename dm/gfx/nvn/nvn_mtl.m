@@ -1795,6 +1795,18 @@ static _Atomic uint64_t g_ser_gen = 1;
 // or another texture takes over their storage (alias_take_over).
 typedef struct { uint64_t pool; int64_t off; nvn_texdesc d; } alias_key;
 static nvn_hmap g_alias = {.klen = sizeof(alias_key)};
+// Live serial-table reference counts, maintained by all writers under g_smu.
+// An alias takeover no longer scans every serial for every overlapping texture.
+// Keep the reference-table scan as an opt-in A/B fallback for device diagnosis.
+static nvn_hmap g_by_serial_held = {.klen = sizeof(uintptr_t)};
+static void serial_held_change(const void *object, int delta) {
+    if (!object) return;
+    uintptr_t key = (uintptr_t)object;
+    uintptr_t previous = (uintptr_t)nvn_hm_get(&g_by_serial_held, &key);
+    if (delta > 0) nvn_hm_put(&g_by_serial_held, &key, (void *)(previous + 1));
+    else if (previous > 1) nvn_hm_put(&g_by_serial_held, &key, (void *)(previous - 1));
+    else if (previous) nvn_hm_del(&g_by_serial_held, &key);
+}
 static nvn_hmap g_alias_seen = {.klen = sizeof(alias_key)};   // key → g_fence + 1 at its last lookup or creation (alias_take_over spares entries looked up lately)
 // Live GPU-only image descriptions, including those not used yet. A dynamic-resolution family declares its largest image before any particular resolution is used.
 // Keeping only descriptions here lets its first allocation cover that family exactly, without allocating every resolution or rounding to a power of two.
@@ -1855,6 +1867,13 @@ enum { ALIAS_IDLE = 16 };
 static uint64_t g_alias_taken;   // shared textures evicted when another texture took over their storage (for the memory report)
 static nvn_hmap g_ghost;   // defined below (finalized texture serials)
 static int serial_holds(nvn_hmap *m, id o) { for (uint32_t i = 0; i < m->cap; i++) if (m->vals[i] == (__bridge void *)o) return 1; return 0; }
+static int serial_table_holds(const void *o) {
+    static int slow = -1;
+    if (slow < 0) { const char *e = getenv("DM_NVN_HELD_SCAN"); slow = e && !strcmp(e, "1"); }
+    if (slow) return serial_holds(&g_by_serial, (__bridge id)o);
+    uintptr_t key = (uintptr_t)o;
+    return nvn_hm_get(&g_by_serial_held, &key) != NULL;
+}
 static void alias_take_over(const alias_key *nk) {
     nvn_texlayout L; nvn_tex_layout(&nk->d, &L);
     if (!L.size) return;
@@ -1866,7 +1885,7 @@ static void alias_take_over(const alias_key *nk) {
         if (k.pool != nk->pool || !memcmp(&k, nk, sizeof k) || k.off >= hi) continue;
         nvn_texlayout kl; nvn_tex_layout(&k.d, &kl);
         uint64_t seen = (uint64_t)(uintptr_t)nvn_hm_get(&g_alias_seen, &k);
-        if (k.off + (int64_t)kl.size <= lo || (seen && g_fence + 1 - seen < ALIAS_IDLE) || serial_holds(&g_by_serial, (__bridge id)g_alias.vals[i])) continue;
+        if (k.off + (int64_t)kl.size <= lo || (seen && g_fence + 1 - seen < ALIAS_IDLE) || serial_table_holds(g_alias.vals[i])) continue;
         ks[n++] = k;
     }
     for (uint32_t j = 0; j < n; j++) {
@@ -1880,8 +1899,29 @@ static void alias_take_over(const alias_key *nk) {
     if (n) { g_ser_gen++; g_alias_taken += n; }
 }
 static __unsafe_unretained id serial_get(uint64_t k) { pthread_mutex_lock(&g_smu); __unsafe_unretained id o = hm_get_id(&g_by_serial, &k); pthread_mutex_unlock(&g_smu); return o; }
-static void serial_put(uint64_t k, id o) { pthread_mutex_lock(&g_smu); id old = hm_get_id(&g_by_serial, &k); if (old) { if (alias_has(old)) defer_obj_unref(old); else defer_obj_release(old); } hm_put_id(&g_by_serial, &k, o); g_ser_gen++; pthread_mutex_unlock(&g_smu); }
-static void serial_del(uint64_t k) { pthread_mutex_lock(&g_smu); id old = hm_get_id(&g_by_serial, &k); if (old) { if (alias_has(old)) defer_obj_unref(old); else defer_obj_release(old); hm_del_id(&g_by_serial, &k); g_ser_gen++; } pthread_mutex_unlock(&g_smu); }   // nothing to drop: the texture ID caches stay valid
+static void serial_put(uint64_t k, id o) {
+    pthread_mutex_lock(&g_smu);
+    id old = hm_get_id(&g_by_serial, &k);
+    if (old) {
+        serial_held_change((__bridge void *)old, -1);
+        if (alias_has(old)) defer_obj_unref(old); else defer_obj_release(old);
+    }
+    hm_put_id(&g_by_serial, &k, o);
+    serial_held_change((__bridge void *)o, 1);
+    g_ser_gen++;
+    pthread_mutex_unlock(&g_smu);
+}
+static void serial_del(uint64_t k) {
+    pthread_mutex_lock(&g_smu);
+    id old = hm_get_id(&g_by_serial, &k);
+    if (old) {
+        serial_held_change((__bridge void *)old, -1);
+        if (alias_has(old)) defer_obj_unref(old); else defer_obj_release(old);
+        hm_del_id(&g_by_serial, &k);
+        g_ser_gen++;
+    }
+    pthread_mutex_unlock(&g_smu);
+}   // nothing to drop: the texture ID caches stay valid
 // Texture serials owned by a live NVN texture object (TextureInitialize until Finalize or re-initialization, hle_nvn.c). Command records and texture pool registrations snapshot the
 // texture object (tex_snap in hle_nvn.c, mtl_reg_tex), so replay can resolve a texture the game has already finalized: Breath of the Wild records each frame's transient render targets
 // (the HUD captures, the 640x360 half-resolution buffers) and finalizes their objects before it submits. Those serials went back into g_by_serial and stayed there for good, as no second
@@ -1906,13 +1946,16 @@ static void tex_put(uint64_t k, id o) {   // serials from 2^62 up are external t
     pthread_mutex_lock(&g_smu);
     nvn_hmap *m = k >= (1ull << 62) || nvn_hm_get(&g_tex_live, &k) ? &g_by_serial : &g_ghost;
     id old = hm_get_id(m, &k);
+    if (old && m == &g_by_serial) serial_held_change((__bridge void *)old, -1);
     if (old) obj_drop(old);
     else if (m == &g_ghost) {
         uint64_t *slot = &g_ghost_ring[g_ghost_next++ % NGHOST];
         if (*slot) { id ev = hm_get_id(&g_ghost, slot); if (ev) obj_drop(ev); hm_del_id(&g_ghost, slot); }
         *slot = k; g_ghost_puts++;
     }
-    hm_put_id(m, &k, o); g_ser_gen++;
+    hm_put_id(m, &k, o);
+    if (m == &g_by_serial) serial_held_change((__bridge void *)o, 1);
+    g_ser_gen++;
     pthread_mutex_unlock(&g_smu);
 }
 // Host record of a packaged texture: the current MTLTexture, the upload stamp, and the global write generation at the last check
@@ -2060,7 +2103,9 @@ static id<MTLTexture> tex_upgrade(const tex_t *t, id<MTLTexture> base, MTLTextur
         for (unsigned j = 0; j < 2; j++) for (uint32_t i = 0; i < tables[j]->cap; i++) {
             if (tables[j]->vals[i] != (__bridge void *)base) continue;
             uint64_t serial; memcpy(&serial, tables[j]->keys + (size_t)i * tables[j]->klen, sizeof serial);
-            void *old = tables[j]->vals[i]; tables[j]->vals[i] = (void *)CFBridgingRetain(upgraded); CFRelease(old); named |= serial == t->serial;
+            void *old = tables[j]->vals[i]; tables[j]->vals[i] = (void *)CFBridgingRetain(upgraded);
+            if (!j) { serial_held_change(old, -1); serial_held_change((__bridge void *)upgraded, 1); }
+            CFRelease(old); named |= serial == t->serial;
         }
         for (uint32_t i = 0; i < g_alias.cap; i++) {
             if (g_alias.vals[i] != (__bridge void *)base) continue;
