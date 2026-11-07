@@ -38,6 +38,8 @@
 #include "nvn_warm_budget.h"
 #include "nvn_tuning.h"
 #include "nvn_memory.h"
+#include "nvn_sbw_range.h"
+#include "nvn_upload_window.h"
 #include "nvn_sampler_quality.h"
 #include "nvn_archive_route.h"
 #include "dmsh_chain.h"   // DMSH_CHAIN: the translation chain version of the B shader library expected by this source tree, one for every game (beside this file, tools/dmsh_chain.py --header)
@@ -818,11 +820,11 @@ static upd_ent g_upd[PEND_MAX]; static int g_nupd;
 // wrote them. A counter report does not count against this submission's shadows: the host writes reports on the CPU when the whole submission has completed, so no draw of it reads one
 // (Fire Emblem Engage writes its query reports into the page of a uniform block); it counts for later submissions while this one runs (gw_commit)
 enum { SBW_N = 16384, SBW_PAGES = 4096 };
-static struct { uint64_t page; uint32_t gen; uint8_t src; } g_sbwp[SBW_N]; static int g_nsbw, g_sbw_over;   // src: SBW_* bits; pages in the set this submission; over: a write could not be kept (too large, set full, size not known)
+static struct { uint64_t page, gpu_mask[4]; uint32_t gen; uint8_t src; } g_sbwp[SBW_N]; static int g_nsbw, g_sbw_over;   // src: SBW_* bits; pages in the set this submission; over: a write could not be kept (too large, set full, size not known)
 static int sbw_slot(uint64_t pg, int add) {   // open addressing; −1 = not there (or no room to add)
     unsigned h = (unsigned)((pg * 0x9E3779B97F4A7C15ull) >> 50) & (SBW_N - 1);
     for (int i = 0; i < 64; i++, h = (h + 1) & (SBW_N - 1)) {
-        if (g_sbwp[h].gen != g_pend_gen) { if (!add) return -1; g_sbwp[h].page = pg; g_sbwp[h].gen = g_pend_gen; g_sbwp[h].src = 0; g_nsbw++; return (int)h; }
+        if (g_sbwp[h].gen != g_pend_gen) { if (!add) return -1; g_sbwp[h].page = pg; g_sbwp[h].gen = g_pend_gen; g_sbwp[h].src = 0; memset(g_sbwp[h].gpu_mask, 0, sizeof g_sbwp[h].gpu_mask); g_nsbw++; return (int)h; }
         if (g_sbwp[h].page == pg) return (int)h; }
     return -1;
 }
@@ -830,10 +832,40 @@ enum { SBW_GPU = 1, SBW_REPORT = 2 };
 static uint32_t g_sbw_gen;   // bumped by every write noted that this submission's shadows must respect (a cached shadow made before it is checked again)
 static void sbw_note(uint64_t lo, uint64_t n, int src) {
     if (src == SBW_GPU) g_sbw_gen++;
-    if (!n || n > (uint64_t)SBW_PAGES << 12) { if (src == SBW_GPU) g_sbw_over = 1; return; }   // a report too large to keep cannot happen (16 bytes)
-    for (uint64_t pg = lo >> 12; pg <= (lo + n - 1) >> 12; pg++) { int k = sbw_slot(pg, 1); if (k < 0) { g_sbw_over = 1; return; } g_sbwp[k].src |= (uint8_t)src; }
+    if (!n || n > (uint64_t)SBW_PAGES << 12 || lo > UINT64_MAX - n) {
+        if (src == SBW_GPU) g_sbw_over = 1;
+        return;
+    }
+    uint64_t last = lo + n - 1;
+    for (uint64_t pg = lo >> 12; pg <= last >> 12; pg++) {
+        int k = sbw_slot(pg, 1);
+        if (k < 0) { g_sbw_over = 1; return; }
+        g_sbwp[k].src |= (uint8_t)src;
+        // Keep known GPU writes conservatively at 16-byte precision.
+        // Unrelated uniforms in the same 4 KiB page no longer force a pass cut.
+        if (src & SBW_GPU) {
+            unsigned first = pg == (lo >> 12) ? (unsigned)(lo & 4095u) : 0u;
+            unsigned end = pg == (last >> 12) ? (unsigned)(last & 4095u) + 1u : 4096u;
+            nvn_sbw_mark16(g_sbwp[k].gpu_mask, first, end);
+        }
+    }
 }
-static int sbw_hits(uint64_t lo, uint64_t hi) { if (!g_nsbw) return 0; for (uint64_t pg = lo >> 12; pg <= (hi - 1) >> 12; pg++) { int k = sbw_slot(pg, 0); if (k >= 0 && (g_sbwp[k].src & SBW_GPU)) return 1; } return 0; }
+static int sbw_hits(uint64_t lo, uint64_t hi) {
+    if (hi <= lo) return 1; // Unknown/overflowed read: fail closed.
+    if (!g_nsbw) return 0;
+    static int fine = -1;
+    if (fine < 0) { const char *e = getenv("DM_NVN_SBW_FINE"); fine = !e || atoi(e); }
+    uint64_t last = hi - 1;
+    for (uint64_t pg = lo >> 12; pg <= last >> 12; pg++) {
+        int k = sbw_slot(pg, 0);
+        if (k >= 0 && (g_sbwp[k].src & SBW_GPU)) {
+            unsigned first = pg == (lo >> 12) ? (unsigned)(lo & 4095u) : 0u;
+            unsigned end = pg == (last >> 12) ? (unsigned)(last & 4095u) + 1u : 4096u;
+            if (!fine || nvn_sbw_hits16(g_sbwp[k].gpu_mask, first, end)) return 1;
+        }
+    }
+    return 0;
+}
 static inline unsigned pend_bucket(uint64_t page) { return (unsigned)((page * 0x9E3779B97F4A7C15ull) >> 53) & (PEND_HB - 1); }
 static void pend_reset(void) { g_npend = g_pend_over = g_nupd = g_npnode = g_nwide = g_nsbw = g_sbw_over = 0; if (!++g_pend_gen) { memset(g_pend_hgen, 0, sizeof g_pend_hgen); memset(g_sbwp, 0, sizeof g_sbwp); g_pend_gen = 1; } }
 static void vc_gpu_write(uint64_t dst, uint64_t n);   // kept index ranges under the written range are not trusted again (ix_range)
@@ -2068,12 +2100,25 @@ static unsigned g_up_seq;
 #define UP_SLOT_BLOCK (4u * 1024u * 1024u)
 static __strong id<MTLBuffer> g_up_slot_blk[3], g_up_slot_over[3]; static unsigned g_up_cur_slot;
 static size_t g_up_slot_want[3], g_up_batch_bytes; static int g_up_over_used;
+static unsigned g_up_slot_quiet[3], g_up_over_idle[3], g_up_cpu_idle[3];
 // CPU transcodes need shared storage; the GPU deswizzle arena is private.
 // Reuse at most 8 MiB per fenced upload slot, never before its batch completes.
 static __strong id<MTLBuffer> g_up_cpu_slot[3];
 static uint64_t g_up_slot_seen[3];   // submit-thread owned; only completed, cold slots may be trimmed
 static int g_up_cpu_used;
 static int up_reuse(void) { static int on = -1; if (on < 0) { const char *e = getenv("DM_NVN_UPLOAD_REUSE"); on = !e || atoi(e); } return on; }
+// Sample headroom infrequently: do not query the OS per texture.
+// Explicit OS pressure always takes effect immediately.
+static int up_trim_pressure(void) {
+    if (atomic_load(&g_mem_level) || atomic_load(&g_mem_pressure)) return 1;
+#if TARGET_OS_IPHONE
+    static unsigned n; static int low;
+    if (!(n++ & 15u)) low = os_proc_available_memory() < (1024ull << 20);
+    return low;
+#else
+    return 0;
+#endif
+}
 static int up_retained(id<MTLBuffer> b, unsigned slot) { return b && (b == g_up_slot_blk[slot] || b == g_up_slot_over[slot]); }
 typedef struct {
     __unsafe_unretained id<MTLBuffer> src;
@@ -2154,7 +2199,12 @@ static void up_flush(void) {
     // Outside a submission nothing else hands the encode thread its current block until the next submission, so a batch flushed on the spot stayed a record and every wait for it
     // (nvnQueueFinish on any thread, up_begin on another) waited for that submission: hand it over now (from PR #141, which found the nvnQueueFinish half)
     if (!g_cb) rec_publish();
-    if (up_reuse()) g_up_slot_want[slot] = MAX(g_up_slot_want[slot], g_up_batch_bytes);
+    if (up_reuse()) {
+        int pressure = up_trim_pressure();
+        g_up_slot_want[slot] = nvn_upload_recent_want(g_up_slot_want[slot], g_up_batch_bytes, &g_up_slot_quiet[slot], pressure);
+        g_up_over_idle[slot] = g_up_over_used ? 0 : MIN(g_up_over_idle[slot] + 1u, 16u);
+        g_up_cpu_idle[slot] = g_up_cpu_used ? 0 : MIN(g_up_cpu_idle[slot] + 1u, 16u);
+    }
     g_up_cb = nil;
     up_diag();
     g_nup_blits = 0;
@@ -2170,10 +2220,24 @@ static void up_begin(void) {
     // block, and its RHI thread waited for good inside nvnQueueSubmitCommands (q_cb drains before it waits for the same reason)
     if (atomic_load(&g_up_alloc_busy[slot])) rec_publish();
     up_wait_zero(&g_up_alloc_busy[slot], WS_UPALLOC);
+    // The previous upload GPU work for this slot is finished. Release only
+    // surplus reusable staging, not buffers still referenced by a live batch.
+    if (up_reuse() && up_trim_pressure()) {
+        size_t target = MAX((size_t)UP_SLOT_BLOCK, g_up_slot_want[slot]);
+        if (g_up_slot_blk[slot] && g_up_slot_blk[slot].length > target
+            && g_up_slot_blk[slot].length / 2 >= target) {
+            res_remove(g_up_slot_blk[slot]); g_up_slot_blk[slot] = nil;
+        }
+        if (g_up_slot_over[slot] && g_up_over_idle[slot] >= 2) {
+            res_remove(g_up_slot_over[slot]); g_up_slot_over[slot] = nil;
+        }
+        if (g_up_cpu_slot[slot] && g_up_cpu_idle[slot] >= 2) {
+            res_remove(g_up_cpu_slot[slot]); g_up_cpu_slot[slot] = nil;
+        }
+    }
     atomic_store(&g_up_alloc_busy[slot], 1); g_up_cur_slot = slot;
     g_up_slot_seen[slot] = g_fence + 1;
     g_up_batch_bytes = 0; g_up_over_used = 0; g_up_cpu_used = 0;
-    if (atomic_load(&g_mem_level) && g_up_cpu_slot[slot]) { defer_obj_release(g_up_cpu_slot[slot]); g_up_cpu_slot[slot] = nil; }
     [g_up_alloc4[slot] reset];
     g_up_cb = [g_dev newCommandBuffer];
     [g_up_cb beginCommandBufferWithAllocator:g_up_alloc4[slot]];
@@ -4631,6 +4695,7 @@ static void memory_scratch_trim(void) {
             retired += (*buffers[k]).length; res_remove(*buffers[k]); *buffers[k] = nil;
         }
         g_up_slot_want[i] = 0;
+        g_up_slot_quiet[i] = g_up_over_idle[i] = g_up_cpu_idle[i] = 0;
     }
     if (retired) {
         atomic_fetch_add(&g_mem_scratch_retired, retired);
@@ -6358,7 +6423,7 @@ static NSString *warm_key(const char *s, size_t n) {
 // workers had loaded/compiled it. Failed loads are cached too.
 @interface WarmShaderBuild : NSObject { @public dispatch_group_t done; NvShader *shader; } @end
 @implementation WarmShaderBuild @end
-@interface WarmTask : NSObject { @public int kind, stage, learned; NSString *key, *vkey, *fkey; NSMutableArray<NSData *> *rs; } @end
+@interface WarmTask : NSObject { @public int kind, stage, learned; NSString *key, *vkey, *fkey; NSMutableArray<NSData *> *rs; NSMutableArray<NSNumber *> *r_learned; } @end
 @implementation WarmTask @end
 static NSMutableDictionary *g_warm_dict; static os_unfair_lock g_warm_dict_lock = OS_UNFAIR_LOCK_INIT;
 static _Atomic uint64_t g_warm_shader_loads;
@@ -6425,8 +6490,9 @@ static NSArray<WarmTask *> *warm_parse(NSArray<NSString *> *paths, long *lines) 
                 if (!vkey.length || warm_stale(vkey, stale) || (fkey.length && warm_stale(fkey, stale))) continue;
                 NSString *pk = [NSString stringWithFormat:@"%@|%@", vkey, fkey];
                 t = pairs[pk];
-                if (!t) { t = [WarmTask new]; t->learned = learned; t->kind = 1; t->vkey = vkey; t->fkey = fkey; t->rs = [NSMutableArray array]; pairs[pk] = t; [tasks addObject:t]; }
-                [t->rs addObject:kd];
+                if (!t) { t = [WarmTask new]; t->learned = learned; t->kind = 1; t->vkey = vkey; t->fkey = fkey; t->rs = [NSMutableArray array]; t->r_learned = [NSMutableArray array]; pairs[pk] = t; [tasks addObject:t]; }
+                else t->learned &= learned; // A mixed shader pair has mandatory work.
+                [t->rs addObject:kd]; [t->r_learned addObject:@(learned)];
             } else continue;
             n++;
         }
@@ -6455,7 +6521,17 @@ static void warm_task(WarmTask *t) {
         }
         pso_skey sk; [t->rs[0] getBytes:&sk length:sizeof sk];
         NvShader *vs = warm_shader(t->vkey, sk.vs_stage), *fs = t->fkey.length ? warm_shader(t->fkey, sk.fs_stage) : nil;
-        for (NSData *row in t->rs) {
+        for (NSUInteger ri = 0; ri < t->rs.count; ri++) {
+            NSData *row = t->rs[ri];
+#if TARGET_OS_IPHONE
+            // Memory checks belong to each optional pipeline variant, not
+            // to a shared group that may also contain mandatory pipelines.
+            if ([t->r_learned[ri] boolValue] &&
+                (os_proc_available_memory() < (768ull << 20) ||
+                 atomic_load(&g_mem_level) || atomic_load(&g_mem_pressure))) {
+                g_warm_budget_skipped++; g_warm_done++; continue;
+            }
+#endif
             [row getBytes:&sk length:sizeof sk];
             if (!vs || (t->fkey.length && !fs)) { g_warm_done++; continue; }
             id<MTLFunction> fsfn = nil;
