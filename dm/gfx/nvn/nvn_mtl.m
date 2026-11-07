@@ -372,9 +372,14 @@ const char *dm_mem_guard_reason(void) { return nvn_memory_reason(atomic_load(&g_
 static void defer_drain(void) { @autoreleasepool {
     NSMutableArray<NvDeferredRelease *> *ready = [NSMutableArray array];
     pthread_mutex_lock(&g_deferred_mu);
-    for (NSInteger i = g_deferred.count - 1; i >= 0; i--) {
-        NvDeferredRelease *d = g_deferred[(NSUInteger)i];
-        if (d->fence <= g_done) { [ready addObject:d]; [g_deferred removeObjectAtIndex:(NSUInteger)i]; }
+    // Linear partition instead of repeated middle-of-array removals: scene
+    // loads can enqueue thousands of releases, making the old path quadratic.
+    uint64_t done = g_done;
+    for (NvDeferredRelease *d in g_deferred) if (d->fence <= done) [ready addObject:d];
+    if (ready.count) {
+        NSMutableArray<NvDeferredRelease *> *keep = [NSMutableArray arrayWithCapacity:g_deferred.count - ready.count];
+        for (NvDeferredRelease *d in g_deferred) if (d->fence > done) [keep addObject:d];
+        g_deferred = keep;
     }
     pthread_mutex_unlock(&g_deferred_mu);
     for (NvDeferredRelease *d in ready) {
