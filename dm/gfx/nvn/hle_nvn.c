@@ -1433,6 +1433,13 @@ static void power_line(uint64_t frame) {
         void mtl_ubp_stats(uint64_t *, uint64_t *, uint64_t *); static uint64_t ppm, ppr, ppf; uint64_t pm, pr, pf_; mtl_ubp_stats(&pm, &pr, &pf_);
         void mtl_lc_stats(uint64_t *, uint64_t *); static uint64_t plt, pll; uint64_t lt, ll; mtl_lc_stats(&lt, &ll);
         void mtl_ubp_why(uint64_t w[5]); static uint64_t pw5[5]; uint64_t w5[5]; mtl_ubp_why(w5);
+        void mtl_sbw_diagnostics(uint64_t out[6]); static uint64_t psbw[6]; uint64_t sbw[6]; mtl_sbw_diagnostics(sbw);
+        if (memcmp(sbw, psbw, sizeof sbw))
+            LOG("[nvn] uniform GPU-write analysis up to frame %llu: unknown/invalid writes %llu, known writes over 16 MiB %llu, page-table capacity failures %llu; shadows refused by conservative global overflow %llu, confirmed 16-byte tile conflicts %llu, same-page but disjoint ranges spared %llu (diagnostic counts, not exact saved render passes)",
+                frame, (unsigned long long)(sbw[0]-psbw[0]), (unsigned long long)(sbw[1]-psbw[1]),
+                (unsigned long long)(sbw[2]-psbw[2]), (unsigned long long)(sbw[3]-psbw[3]),
+                (unsigned long long)(sbw[5]-psbw[5]), (unsigned long long)(sbw[4]-psbw[4]));
+        memcpy(psbw, sbw, sizeof sbw);
         uint64_t ld, st, fu, udc = mtl_udc_saved_bytes(); mtl_bw(&ld, &st, &fu);
         void mtl_sm_stats(uint64_t *, uint64_t *, uint64_t *); static uint64_t psmp, psmc, psmw; uint64_t smp, smc, smw; mtl_sm_stats(&smp, &smc, &smw);
         void mtl_cshoist_stats(uint64_t *, uint64_t *, uint64_t *); static uint64_t pchm, pchd, pchs[8]; uint64_t chm, chd, chs[8]; mtl_cshoist_stats(&chm, &chd, chs);

@@ -837,16 +837,32 @@ static int sbw_slot(uint64_t pg, int add) {   // open addressing; −1 = not the
 }
 enum { SBW_GPU = 1, SBW_REPORT = 2 };
 static uint32_t g_sbw_gen;   // bumped by every write noted that this submission's shadows must respect (a cached shadow made before it is checked again)
+// Counters only: no relaxed GPU ordering, barrier, or CPU shadow decision changes.
+// 0 invalid/unknown GPU write span, 1 valid >16 MiB write, 2 table capacity,
+// 3 shadow denied by global overflow, 4 known page but disjoint 16-B tiles,
+// 5 genuine known tile intersections. The power line reports window deltas.
+enum { SBW_D_UNKNOWN, SBW_D_LARGE, SBW_D_CAPACITY, SBW_D_OVER_DENY, SBW_D_DISJOINT, SBW_D_OVERLAP, SBW_D_COUNT };
+static _Atomic uint64_t g_sbw_diag[SBW_D_COUNT];
+void mtl_sbw_diagnostics(uint64_t out[SBW_D_COUNT]) {
+    for (unsigned i = 0; i < SBW_D_COUNT; i++) out[i] = atomic_load_explicit(&g_sbw_diag[i], memory_order_relaxed);
+}
 static void sbw_note(uint64_t lo, uint64_t n, int src) {
     if (src == SBW_GPU) g_sbw_gen++;
     if (!n || n > (uint64_t)SBW_PAGES << 12 || lo > UINT64_MAX - n) {
-        if (src == SBW_GPU) g_sbw_over = 1;
+        if (src == SBW_GPU) {
+            atomic_fetch_add_explicit(&g_sbw_diag[n && lo <= UINT64_MAX - n ? SBW_D_LARGE : SBW_D_UNKNOWN], 1, memory_order_relaxed);
+            g_sbw_over = 1;
+        }
         return;
     }
     uint64_t last = lo + n - 1;
     for (uint64_t pg = lo >> 12; pg <= last >> 12; pg++) {
         int k = sbw_slot(pg, 1);
-        if (k < 0) { g_sbw_over = 1; return; }
+        if (k < 0) {
+            if (src == SBW_GPU) atomic_fetch_add_explicit(&g_sbw_diag[SBW_D_CAPACITY], 1, memory_order_relaxed);
+            g_sbw_over = 1;
+            return;
+        }
         g_sbwp[k].src |= (uint8_t)src;
         // Keep known GPU writes conservatively at 16-byte precision.
         // Unrelated uniforms in the same 4 KiB page no longer force a pass cut.
@@ -863,14 +879,19 @@ static int sbw_hits(uint64_t lo, uint64_t hi) {
     static int fine = -1;
     if (fine < 0) { const char *e = getenv("DM_NVN_SBW_FINE"); fine = !e || atoi(e); }
     uint64_t last = hi - 1;
+    int shared_page = 0;
     for (uint64_t pg = lo >> 12; pg <= last >> 12; pg++) {
         int k = sbw_slot(pg, 0);
         if (k >= 0 && (g_sbwp[k].src & SBW_GPU)) {
+            shared_page = 1;
             unsigned first = pg == (lo >> 12) ? (unsigned)(lo & 4095u) : 0u;
             unsigned end = pg == (last >> 12) ? (unsigned)(last & 4095u) + 1u : 4096u;
-            if (!fine || nvn_sbw_hits16(g_sbwp[k].gpu_mask, first, end)) return 1;
+            int overlaps = nvn_sbw_hits16(g_sbwp[k].gpu_mask, first, end);
+            if (overlaps) atomic_fetch_add_explicit(&g_sbw_diag[SBW_D_OVERLAP], 1, memory_order_relaxed);
+            if (!fine || overlaps) return 1;
         }
     }
+    if (shared_page && fine) atomic_fetch_add_explicit(&g_sbw_diag[SBW_D_DISJOINT], 1, memory_order_relaxed);
     return 0;
 }
 static inline unsigned pend_bucket(uint64_t page) { return (unsigned)((page * 0x9E3779B97F4A7C15ull) >> 53) & (PEND_HB - 1); }
@@ -1350,7 +1371,14 @@ static int ubp_get(uint64_t lo, uint64_t hi, uint64_t *gpu, const uint8_t **cpu)
     if (!ub_partial_on() || hi <= lo || hi - lo > UBP_MAX_BYTES) { g_ubp_why[0]++; return 0; }
     ubp_ent *c = NULL;
     for (int i = 0; i < UBP_CACHE; i++) if (g_ubpc[i].lo == lo && g_ubpc[i].hi == hi && g_ubpc[i].gen == g_pend_gen) { c = &g_ubpc[i]; break; }
-    if (!c || c->sbw != g_sbw_gen) { if (g_sbw_over || sbw_hits(lo, hi)) { g_ubp_why[1]++; return 0; } if (c) c->sbw = g_sbw_gen; }
+    if (!c || c->sbw != g_sbw_gen) {
+        if (g_sbw_over) {
+            atomic_fetch_add_explicit(&g_sbw_diag[SBW_D_OVER_DENY], 1, memory_order_relaxed);
+            g_ubp_why[1]++; return 0;
+        }
+        if (sbw_hits(lo, hi)) { g_ubp_why[1]++; return 0; }
+        if (c) c->sbw = g_sbw_gen;
+    }
     if (c && c->npend == g_npend) { g_ubp_reused++; *gpu = c->gpu; *cpu = c->cpu; g_ubp_ready = c->ready; return 1; }
     int since = c ? c->npend : 0;
     if (!c && gw_live(lo, hi)) { g_ubp_why[2]++; return 0; }
