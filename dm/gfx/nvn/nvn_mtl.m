@@ -886,9 +886,13 @@ static int sbw_hits(uint64_t lo, uint64_t hi) {
             shared_page = 1;
             unsigned first = pg == (lo >> 12) ? (unsigned)(lo & 4095u) : 0u;
             unsigned end = pg == (last >> 12) ? (unsigned)(last & 4095u) + 1u : 4096u;
+            // The A/B fallback keeps its original page-granular fast path.
+            if (!fine) return 1;
             int overlaps = nvn_sbw_hits16(g_sbwp[k].gpu_mask, first, end);
-            if (overlaps) atomic_fetch_add_explicit(&g_sbw_diag[SBW_D_OVERLAP], 1, memory_order_relaxed);
-            if (!fine || overlaps) return 1;
+            if (overlaps) {
+                atomic_fetch_add_explicit(&g_sbw_diag[SBW_D_OVERLAP], 1, memory_order_relaxed);
+                return 1;
+            }
         }
     }
     if (shared_page && fine) atomic_fetch_add_explicit(&g_sbw_diag[SBW_D_DISJOINT], 1, memory_order_relaxed);
