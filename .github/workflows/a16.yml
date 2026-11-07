@@ -33,6 +33,8 @@ jobs:
         run: |
           clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_memory.c -o /tmp/memory
           /tmp/memory
+          clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_pretrim.c -o /tmp/pretrim
+          /tmp/pretrim
           clang -O2 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_sbw_range.c -o /tmp/sbw-range
           /tmp/sbw-range
           clang -O2 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_upload_window.c -o /tmp/upload-window

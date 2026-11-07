@@ -38,6 +38,7 @@
 #include "nvn_warm_budget.h"
 #include "nvn_tuning.h"
 #include "nvn_memory.h"
+#include "nvn_pretrim.h"
 #include "nvn_sbw_range.h"
 #include "nvn_upload_window.h"
 #include "nvn_sampler_quality.h"
@@ -311,6 +312,7 @@ static void defer_obj_unref(id obj) { defer_obj_release_ex(obj, 1); }
 // polling alone must neither clear critical pressure nor latch it forever.
 // Relief only retires rebuildable scratch after its GPU work, never guest data.
 static _Atomic int g_mem_level;
+static _Atomic int g_mem_pretrim; // Soft cleanup hint only: never used to lower the FPS cap.
 static _Atomic int g_mem_flushes;
 static _Atomic int g_mem_pressure, g_mem_reason;
 static _Atomic uint64_t g_mem_reclaimed;
@@ -4696,10 +4698,26 @@ static void memory_scratch_trim(void) {
     // the GPU callback releases them only after the slot's last upload ends.
     // No GPU wait, live-texture eviction or texture reconversion in this path.
     int level = atomic_load(&g_mem_level), pressure = atomic_load(&g_mem_pressure);
-    if (!level && !pressure) return;
+#if TARGET_OS_IPHONE
+    // Sample OS headroom once per second, not once per frame or texture.
+    // Persistent <1 GiB can trigger cleanup of finished cold scratch before
+    // the OS memory warning. This does NOT change the existing safety cap.
+    static nvn_pretrim soft;
+    static uint64_t last_check;
+    uint64_t now = now_ns();
+    if (!last_check || now < last_check || now - last_check >= 1000000000ull) {
+        last_check = now;
+        atomic_store(&g_mem_pretrim,
+            nvn_pretrim_tick(&soft, now, os_proc_available_memory(), level || pressure));
+    } else if (level || pressure) atomic_store(&g_mem_pretrim, 1);
+#endif
+    int proactive = atomic_load(&g_mem_pretrim);
+    if (!level && !pressure && !proactive) return;
+    // Proactive mode has a longer coldness requirement than urgent OS pressure.
+    uint64_t cold_age = (level || pressure) ? 120u : 240u;
     uint64_t retired = 0;
     for (unsigned i = 0; i < 3; i++) {
-        if (atomic_load(&g_up_alloc_busy[i]) || g_up_cb || g_fence <= g_up_slot_seen[i] + 120) continue;
+        if (atomic_load(&g_up_alloc_busy[i]) || g_up_cb || g_fence <= g_up_slot_seen[i] + cold_age) continue;
         __strong id<MTLBuffer> *buffers[] = {&g_up_slot_blk[i], &g_up_slot_over[i], &g_up_cpu_slot[i]};
         for (unsigned k = 0; k < 3; k++) if (*buffers[k] && (k || (*buffers[k]).length > UP_SLOT_BLOCK)) {
             retired += (*buffers[k]).length; res_remove(*buffers[k]); *buffers[k] = nil;
@@ -4717,13 +4735,22 @@ void arena_begin(void) {
     g_cur_arena = nil;
     uint64_t done = g_done;   // read as the submission start does (its allocator and visibility ring)
     int pressure = atomic_load(&g_mem_level) || atomic_load(&g_mem_pressure);
+    int proactive = atomic_load(&g_mem_pretrim);
     uint64_t retained = 0, retired = 0;
     for (NvArena *a in g_arenas) retained += a->len;
     for (NSUInteger i = g_arenas.count; i-- > 0;) { NvArena *a = g_arenas[i];
         int cold = a->len > ARENA_KEEP && g_fence > a->fence + ARENA_IDLE;
         if (pressure && retained > (16u << 20) && g_fence > a->fence + 120) cold = 1;
+        // Avoid keeping large one-off frame arenas until iOS is critical.
+        // Require GPU completion below; hot/small buffers stay available.
+        else if (proactive && retained > (32u << 20) && a->len > (8u << 20)
+                 && g_fence > a->fence + 240) cold = 1;
         if (a->fence && a->fence <= done && cold) { retained -= a->len; retired += a->len; res_remove(a->buf); [g_arenas removeObjectAtIndex:i]; } }
-    if (retired && pressure) { atomic_fetch_add(&g_mem_scratch_retired, retired); MLOG("memory guard: retired %llu MiB of completed cold frame scratch", (unsigned long long)(retired >> 20)); }
+    if (retired && (pressure || proactive)) {
+        atomic_fetch_add(&g_mem_scratch_retired, retired);
+        MLOG("memory guard: retired %llu MiB of completed cold frame scratch (%s)",
+             (unsigned long long)(retired >> 20), pressure ? "OS/guard pressure" : "proactive low-headroom cleanup");
+    }
 }
 void arena_commit(uint64_t fence) { for (NvArena *a in g_sub_arenas) { a->fence = fence; [g_arenas addObject:a]; } [g_sub_arenas removeAllObjects]; g_cur_arena = nil; }
 // An unqualified id * out-parameter is __autoreleasing under ARC; __strong avoids autoreleasing the arena buffer at every allocation.
