@@ -72,6 +72,16 @@ int main(void) {
     dm_tuning_system(1100000000, 0, 0); frames(1800, 8, 16.666667, 0); assert(dm_tuning_read().scale == 100);
     dm_tuning_boundary(); now += 20000000000ull; frames(1, 24, 25, 0); assert(dm_tuning_read().scale == 100);
 
+    // A protection-induced 30 FPS must not trigger unnecessary quality loss.
+    init(); assert(dm_tuning_set("DM_AUTO_QUALITY", 1)); assert(dm_tuning_set("DM_AUTO_TEXTURE", 1));
+    assert(dm_tuning_set("DM_AUTO_VIEW", 1));
+    dm_tuning_system(818ull << 20, 0, 0); dm_tuning_limits(30, 8, 2, 2);
+    frames(1500, 25, 34, 0);
+    assert(dm_tuning_read().scale == 100 && dm_tuning_read().texture == 0 &&
+           dm_tuning_read().far_clip == 0 && dm_tuning_read().status == DM_TUNE_MEMORY_CAP);
+    dm_tuning_limits(60, 0, 0, 0); dm_tuning_system(1100000000, 0, 0);
+    frames(1200, 24, 25, 0); assert(dm_tuning_read().scale < 100);
+
     init(); assert(dm_tuning_set("DM_AUTO_QUALITY", 1)); assert(dm_tuning_set("DM_AUTO_TEXTURE", 1));
     assert(dm_tuning_set("DM_AUTO_VIEW", 1)); frames(2500, 24, 25, 0);
     assert(dm_tuning_read().texture == 2 && dm_tuning_read().far_clip == 2000);

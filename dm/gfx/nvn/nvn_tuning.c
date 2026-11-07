@@ -146,6 +146,16 @@ void dm_tuning_tick(uint64_t now, double gpu, double frame, double compilation, 
         samples = good_windows = bad_windows = 0; window_start = last_change = now; changed = 0; apply();
     }
     state.gpu_ms = gpu; state.frame_ms = frame;
+    // The OS can cap presentation to 30 FPS while the GPU is capable of 60.
+    // Do not degrade scene quality to chase an FPS rate temporarily forbidden
+    // by memory protection. Resume ordinary feedback on release of the cap.
+    if (state.requested.automatic && state.effective_cap > 0 &&
+        state.effective_cap < state.requested.target && (state.cap_reasons & 8)) {
+        samples = good_windows = bad_windows = 0;
+        window_start = last = now;
+        state.status = DM_TUNE_MEMORY_CAP;
+        goto done;
+    }
     if (!state.requested.automatic) { state.status = DM_TUNE_MANUAL; last = now; goto done; }
     if (!last || now <= last || now - last > 250000000ull || movie || frame > 250 || compilation > 2) {
         samples = good_windows = bad_windows = 0; window_start = now; state.status = DM_TUNE_SETTLING; last = now; goto done;
@@ -225,7 +235,7 @@ void dm_tuning_present(uint64_t timestamp) {
 dm_tuning_snapshot dm_tuning_read(void) { pthread_mutex_lock(&lock); dm_tuning_snapshot s = state; pthread_mutex_unlock(&lock); return s; }
 void dm_tuning_describe(char *text, size_t capacity) {
     dm_tuning_snapshot s = dm_tuning_read();
-    const char *names[] = {"Manual", "Settling/loading", "GPU feedback", "CPU/streaming or other limit", "Quality floor reached", "Waiting for GPU samples", "Quality recovery paused"};
+    const char *names[] = {"Manual", "Settling/loading", "GPU feedback", "CPU/streaming or other limit", "Quality floor reached", "Waiting for GPU samples", "Quality recovery paused", "Memory cap: quality held"};
     const char *limit = s.cap_reasons & 8 ? "Memory/recovery" : s.cap_reasons & 4 ? "Thermal/recovery" : s.cap_reasons & 2 ? "Movie" : s.cap_reasons & 1 ? "Selected target" : "Target active";
     const char *pressure = s.memory_pressure == 2 ? "critical" : s.memory_pressure == 1 ? "warning" : "normal";
     snprintf(text, capacity, "%s · %d%% (%d×%d nominal) · GPU %.1f ms\nFilter %d · visibility %d · %.2f GiB headroom\nTarget %d · cap %d · %s · OS pressure %s\n%s: %d real frames · %.1f fps · p95 %.1f ms",
