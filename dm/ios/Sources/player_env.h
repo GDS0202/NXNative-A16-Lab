@@ -13,6 +13,8 @@ static inline int dm_player_diagnostic_key(const char *key) {
     // Opt-in, counters-only source attribution. No pass dumps, guest addresses
     // or changed synchronization; disabled by default to avoid atomic overhead.
     if(!strcmp(key,"DM_NVN_SBW_TRACE"))return 0;
+    // Experimental allocation-bounded hazard tracker; 0 restores global fail-closed.
+    if(!strcmp(key,"DM_NVN_SBW_SCOPED"))return 0;
     static const char *const prefixes[]={"DM_NVN_","DM_TEST_","MTL_DEBUG_","MTL_SHADER_VALIDATION"};
     for(unsigned i=0;i<sizeof prefixes/sizeof *prefixes;i++)
         if(!strncmp(key,prefixes[i],strlen(prefixes[i])))return 1;
