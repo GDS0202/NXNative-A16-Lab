@@ -82,6 +82,17 @@ int main(void) {
     dm_tuning_limits(60, 0, 0, 0); dm_tuning_system(1100000000, 0, 0);
     frames(1200, 24, 25, 0); assert(dm_tuning_read().scale < 100);
 
+    // A memory cap of 30 must not freeze quality if the GPU needs >33 ms/frame
+    // and the result still misses the *reachable* 30 FPS budget.
+    init(); assert(dm_tuning_set("DM_AUTO_QUALITY", 1));
+    dm_tuning_system(818ull << 20, 0, 0); dm_tuning_limits(30, 8, 2, 2);
+    frames(1000, 54, 59, 0);
+    assert(dm_tuning_read().scale == 80);
+    frames(1200, 24, 34, 0);
+    assert(dm_tuning_read().scale == 80 && dm_tuning_read().status == DM_TUNE_MEMORY_CAP);
+    dm_tuning_limits(60, 0, 0, 0); dm_tuning_system(1100000000, 0, 0);
+    frames(1800, 8, 16.666667, 0); assert(dm_tuning_read().scale == 100);
+
     init(); assert(dm_tuning_set("DM_AUTO_QUALITY", 1)); assert(dm_tuning_set("DM_AUTO_TEXTURE", 1));
     assert(dm_tuning_set("DM_AUTO_VIEW", 1)); frames(2500, 24, 25, 0);
     assert(dm_tuning_read().texture == 2 && dm_tuning_read().far_clip == 2000);
