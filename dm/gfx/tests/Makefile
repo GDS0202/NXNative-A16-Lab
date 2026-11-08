@@ -83,6 +83,8 @@ t_pretrim: t_pretrim.c ../nvn/nvn_pretrim.h
 	clang $(CFLAGS) -o $@ t_pretrim.c
 t_pso_retry: t_pso_retry.c ../nvn/nvn_pso_retry.h
 	clang $(CFLAGS) -o $@ t_pso_retry.c
+t_ubd_envelope: t_ubd_envelope.c ../nvn/nvn_ubd_envelope.h
+	clang $(CFLAGS) -o $@ t_ubd_envelope.c
 t_sbw_range: t_sbw_range.c ../nvn/nvn_sbw_range.h
 	clang $(CFLAGS) -o $@ t_sbw_range.c
 t_sbw_sparse: t_sbw_sparse.c ../nvn/nvn_sbw_sparse.h ../nvn/nvn_sbw_range.h
