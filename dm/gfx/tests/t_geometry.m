@@ -66,10 +66,10 @@ static void cpu_read_proofs(void) {
         EXPECT("queued update copy or fill overlap",1,geo_cpu_hazard(address,64));
         EXPECT("unrelated queued write",0,geo_cpu_hazard(address+4096,64));
     }
-    pend_reset();sbw_note(address,64,SBW_GPU);
+    pend_reset();sbw_note(address,64,SBW_GPU,NVN_SBW_FROM_STORAGE);
     EXPECT("current shader write overlap",1,geo_cpu_hazard(address+32,4));
     EXPECT("unrelated current shader write",0,geo_cpu_hazard(address+4096,64));
-    pend_reset();sbw_note(address,16,SBW_REPORT);
+    pend_reset();sbw_note(address,16,SBW_REPORT,NVN_SBW_FROM_NONE);
     EXPECT("deferred CPU counter report is not current GPU data",0,geo_cpu_hazard(address,64));
     pend_reset();g_pend_over=1;EXPECT("unknown pending writes",1,geo_cpu_hazard(address,64));
     pend_reset();g_sbw_over=1;EXPECT("unknown storage writes",1,geo_cpu_hazard(address,64));
@@ -88,7 +88,7 @@ static void cpu_read_proofs(void) {
     S.attr[0].fmt=0x51;
     EXPECT("converted vertex stream waits for queued write",1,geo_conversion_hazard(vs));
     pend_reset();EXPECT("clean converted stream",0,geo_conversion_hazard(vs));
-    sbw_note(address,64,SBW_GPU);EXPECT("converted stream current GPU write",1,geo_conversion_hazard(vs));
+    sbw_note(address,64,SBW_GPU,NVN_SBW_FROM_STORAGE);EXPECT("converted stream current GPU write",1,geo_conversion_hazard(vs));
     pend_reset();gw_put(address,address+64,g_done+1,g_done);
     EXPECT("converted stream prior GPU write",1,geo_conversion_hazard(vs));
     memset(g_gw,0,sizeof g_gw);S.attr[0].stream=1;S.vbuf[1]=(NVNbufferRange){address+4096,64};pend_add(address,64,2);
@@ -462,7 +462,7 @@ static void replay(int mode) {
         gate=[g_dev newSharedEvent];rec_drain();[g_q4 waitForEvent:gate value:1];
         mtl_sub_begin();id<MTL4ComputeCommandEncoder> en=enc_c_begin(NULL);enc_c_pso(en,writer);
         uint64_t gpu,offset;void *buffer;mtl_gpu_addr((uint64_t)(commands+8192),16,&buffer,&offset,&gpu);enc_c_args(en,gpu,0);
-        enc_c_dispatch(en,MTLSizeMake(1,1,1),MTLSizeMake(1,1,1));enc_c_end(en);sbw_note((uint64_t)(commands+8192),16,SBW_GPU);
+        enc_c_dispatch(en,MTLSizeMake(1,1,1),MTLSizeMake(1,1,1));enc_c_end(en);sbw_note((uint64_t)(commands+8192),16,SBW_GPU,NVN_SBW_FROM_STORAGE);
         mtl_sub_commit();rec_drain();
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW,500000000),dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{gate.signaledValue=1;});
     }
@@ -470,7 +470,7 @@ static void replay(int mode) {
     if(mode==8) {
         id<MTL4ComputeCommandEncoder> en=enc_c_begin(NULL);enc_c_pso(en,writer);
         uint64_t gpu,offset;void *buffer;mtl_gpu_addr((uint64_t)(commands+8192),16,&buffer,&offset,&gpu);enc_c_args(en,gpu,0);
-        enc_c_dispatch(en,MTLSizeMake(1,1,1),MTLSizeMake(1,1,1));enc_c_end(en);sbw_note((uint64_t)(commands+8192),16,SBW_GPU);
+        enc_c_dispatch(en,MTLSizeMake(1,1,1),MTLSizeMake(1,1,1));enc_c_end(en);sbw_note((uint64_t)(commands+8192),16,SBW_GPU,NVN_SBW_FROM_STORAGE);
     }
     if(mode==14)g_sbw_over=1;
     if(mode==15)g_pend_over=1;
