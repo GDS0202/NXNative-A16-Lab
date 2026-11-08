@@ -73,7 +73,7 @@ class HazardReportTests(unittest.TestCase):
         self.assertEqual(summary['sum_gpu_write_origins']['texture_copy']['notes'], 40)
         with self.assertRaisesRegex(ValueError, 'duplicate origins window'):
             report.parse(fixture(300, 20, 22, 3, 2, with_origins=True)
-                         + fixture(300, 23, 24, 3, 2, with_origins=True))
+                         + fixture(300, 23, 24, 3, 2, with_origins=True)[-1:])
 
     def test_same_frame_only_joined_and_duplicate_rejected(self):
         self.assertRaises(ValueError, report.parse, ["[dm] [nvn] unrelated stuff"])
