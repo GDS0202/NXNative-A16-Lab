@@ -1,12 +1,16 @@
 """CPU-only tests for per-window NVN GPU-write diagnostic reports."""
+import importlib.util
 import json
 from pathlib import Path
-import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'scripts'))
-import a16_gpu_hazards as report
+ROOT = Path(__file__).resolve().parents[3]
+spec = importlib.util.spec_from_file_location('a16_gpu_hazards', ROOT / 'scripts/a16_gpu_hazards.py')
+if spec is None or spec.loader is None:
+    raise ImportError('a16_gpu_hazards')
+report = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(report)
 
 
 def fixture(frame, gpu50, gpu95, cuts, refuses, with_sbw=False):
