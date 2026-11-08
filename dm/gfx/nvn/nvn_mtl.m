@@ -42,6 +42,7 @@
 #include "nvn_pso_retry.h"
 #include "nvn_sbw_range.h"
 #include "nvn_sbw_sparse.h"
+#include "nvn_sbw_source_diag.h"
 #include "nvn_upload_window.h"
 #include "nvn_ubd_envelope.h"
 #include "nvn_ubd_page_index.h"
@@ -853,14 +854,42 @@ static uint32_t g_sbw_gen;   // bumped by every write noted that this submission
 // 5 genuine known tile intersections. The power line reports window deltas.
 enum { SBW_D_UNKNOWN, SBW_D_LARGE, SBW_D_CAPACITY, SBW_D_OVER_DENY, SBW_D_DISJOINT, SBW_D_OVERLAP, SBW_D_COUNT };
 static _Atomic uint64_t g_sbw_diag[SBW_D_COUNT];
+// Opt-in only: even an atomic per storage binding would add CPU overhead in
+// dense A16 draws. Zero runtime counter increments unless explicitly enabled.
+static _Atomic uint64_t g_sbw_source_diag[NVN_SBW_SOURCE_COUNTERS];
+static int sbw_source_trace_on(void) {
+    static _Atomic int on = -1;
+    int value = atomic_load_explicit(&on, memory_order_acquire);
+    if (value < 0) {
+        const char *env = getenv("DM_NVN_SBW_TRACE");
+        value = env && atoi(env) != 0;
+        atomic_store_explicit(&on, value, memory_order_release);
+    }
+    return value;
+}
+static inline void sbw_source_count(int origin, unsigned field) {
+    if (origin >= 0 && origin < NVN_SBW_FROM_COUNT && sbw_source_trace_on())
+        atomic_fetch_add_explicit(&g_sbw_source_diag[nvn_sbw_source_counter((unsigned)origin, field)],
+                                  1, memory_order_relaxed);
+}
+void mtl_sbw_source_diagnostics(uint64_t out[NVN_SBW_SOURCE_COUNTERS]) {
+    for (unsigned i = 0; i < NVN_SBW_SOURCE_COUNTERS; i++)
+        out[i] = atomic_load_explicit(&g_sbw_source_diag[i], memory_order_relaxed);
+}
 void mtl_sbw_diagnostics(uint64_t out[SBW_D_COUNT]) {
     for (unsigned i = 0; i < SBW_D_COUNT; i++) out[i] = atomic_load_explicit(&g_sbw_diag[i], memory_order_relaxed);
 }
-static void sbw_note(uint64_t lo, uint64_t n, int src) {
-    if (src == SBW_GPU) g_sbw_gen++;
-    if (!n || n > (uint64_t)SBW_PAGES << 12 || lo > UINT64_MAX - n) {
+static void sbw_note(uint64_t lo, uint64_t n, int src, int origin) {
+    if (src == SBW_GPU) {
+        g_sbw_gen++;
+        sbw_source_count(origin, NVN_SBW_SRC_NOTES);
+    }
+    unsigned span_kind = nvn_sbw_source_span_kind(lo, n, (uint64_t)SBW_PAGES << 12);
+    if (span_kind != NVN_SBW_SRC_NOTES) {
         if (src == SBW_GPU) {
-            atomic_fetch_add_explicit(&g_sbw_diag[n && lo <= UINT64_MAX - n ? SBW_D_LARGE : SBW_D_UNKNOWN], 1, memory_order_relaxed);
+            atomic_fetch_add_explicit(&g_sbw_diag[span_kind == NVN_SBW_SRC_LARGE ? SBW_D_LARGE : SBW_D_UNKNOWN],
+                                      1, memory_order_relaxed);
+            sbw_source_count(origin, span_kind);
             g_sbw_over = 1;
         }
         return;
@@ -869,7 +898,10 @@ static void sbw_note(uint64_t lo, uint64_t n, int src) {
     for (uint64_t pg = lo >> 12; pg <= last >> 12; pg++) {
         int k = sbw_slot(pg, 1);
         if (k < 0) {
-            if (src == SBW_GPU) atomic_fetch_add_explicit(&g_sbw_diag[SBW_D_CAPACITY], 1, memory_order_relaxed);
+            if (src == SBW_GPU) {
+                atomic_fetch_add_explicit(&g_sbw_diag[SBW_D_CAPACITY], 1, memory_order_relaxed);
+                sbw_source_count(origin, NVN_SBW_SRC_CAPACITY);
+            }
             g_sbw_over = 1;
             return;
         }
@@ -1506,7 +1538,7 @@ static void post(post_op o) {
     g_post[g_npost++] = o;
 }
 void mtl_sub_event(volatile uint32_t *val, uint32_t mode, uint32_t v) { post((post_op){1, val, mode, v, 0, 0, NULL}); }
-void mtl_sub_counter(uint64_t addr, uint32_t type) { sbw_note(addr, 16, SBW_REPORT); post((post_op){2, NULL, 0, 0, addr, type, NULL, g_seg}); }
+void mtl_sub_counter(uint64_t addr, uint32_t type) { sbw_note(addr, 16, SBW_REPORT, NVN_SBW_FROM_NONE); post((post_op){2, NULL, 0, 0, addr, type, NULL, g_seg}); }
 void mtl_counter_stats(uint64_t rep[32], uint64_t rst[32]) { memcpy(rep, g_cnt_report, sizeof g_cnt_report); memcpy(rst, g_cnt_reset, sizeof g_cnt_reset); }
 
 // Counter timestamps (614.4 MHz) are taken from the guest clock (hle_os.c guest_ns, the same epoch as svc GetSystemTick / cntpct, whose ticks are 19.2 MHz).
@@ -7261,13 +7293,13 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
         } else if (b->kind == NVN_RB_SBUFP || b->kind == NVN_RB_UBOP) {   // B: storage buffers / compute-stage uniforms are device pointers; the address is taken by NVN slot
             const p_bind_buf *u = reg < 16 ? (b->kind == NVN_RB_UBOP ? &S.ubo[nvn_stage][reg] : &S.ssbo[nvn_stage][reg]) : NULL;
             void *mb; uint64_t mo, gpu;
-            if (u && u->addr && mtl_gpu_addr(u->addr, u->size ? u->size : 1, &mb, &mo, &gpu)) { slots[aid] = gpu; USE((__bridge id<MTLBuffer>)mb, b->rw ? MTLResourceUsageRead | MTLResourceUsageWrite : MTLResourceUsageRead); if (b->rw && b->kind == NVN_RB_SBUFP && !(reg < 32 && (sh->sb_ro >> reg & 1))) sbw_note(u->addr, u->size, SBW_GPU); }   // cb_extent.tsv: slots the shader never writes
+            if (u && u->addr && mtl_gpu_addr(u->addr, u->size ? u->size : 1, &mb, &mo, &gpu)) { slots[aid] = gpu; USE((__bridge id<MTLBuffer>)mb, b->rw ? MTLResourceUsageRead | MTLResourceUsageWrite : MTLResourceUsageRead); if (b->rw && b->kind == NVN_RB_SBUFP && !(reg < 32 && (sh->sb_ro >> reg & 1))) sbw_note(u->addr, u->size, SBW_GPU, NVN_SBW_FROM_STORAGE); }   // cb_extent.tsv: slots the shader never writes
             else { slots[aid] = dummy_buf_gpu(); USE(dummy_buf(), MTLResourceUsageRead); }
             if (bl) PD("B %llu st%d sbufp reg%d %s addr=%#llx size=%llu %s", g_stat_pass, nvn_stage, reg, u && u->addr ? "real" : "dummy", u ? (unsigned long long)u->addr : 0ull, u ? (unsigned long long)u->size : 0ull, b->rw ? "rw" : "ro");
         } else if (b->kind == NVN_RB_SBUFU) {   // B: a storage buffer whose GPU address the game keeps in its own uniform buffer (Monster Hunter Rise's compute shaders: c3 + 0x38); read like a bindless handle
             uint64_t addr; ubo_read(nvn_stage, reg, b->off, 8, &addr);
             void *mb; uint64_t mo, gpu;
-            if (addr && mtl_gpu_addr(addr, 1, &mb, &mo, &gpu)) { slots[aid] = gpu; USE((__bridge id<MTLBuffer>)mb, b->rw ? MTLResourceUsageRead | MTLResourceUsageWrite : MTLResourceUsageRead); if (b->rw) sbw_note(addr, 0, SBW_GPU); }   // size not known
+            if (addr && mtl_gpu_addr(addr, 1, &mb, &mo, &gpu)) { slots[aid] = gpu; USE((__bridge id<MTLBuffer>)mb, b->rw ? MTLResourceUsageRead | MTLResourceUsageWrite : MTLResourceUsageRead); if (b->rw) sbw_note(addr, 0, SBW_GPU, NVN_SBW_FROM_BINDLESS); }   // size not known
             else { slots[aid] = dummy_buf_gpu(); USE(dummy_buf(), MTLResourceUsageRead); }
             if (bl) PD("B %llu st%d sbufu reg%d+%#x addr=%#llx %s", g_stat_pass, nvn_stage, reg, b->off, (unsigned long long)addr, b->rw ? "rw" : "ro");
         } else if (b->kind == NVN_RB_C1) {      // B: the shader's own constant segment, built when the shader is fetched
@@ -9940,7 +9972,7 @@ static void copy_t2b(const p_copy_b2t *c) {
     int is3d = c->tex->d.target == 2, nz = c->r.depth ? c->r.depth : 1;
     void *mb; uint64_t mo;
     if (!mtl_addr(c->src, img * nz, &mb, &mo)) { RED_ONCE(31, "texture→buffer copy destination is in no memory pool"); return; }
-    sbw_note(c->src, img * nz, SBW_GPU);
+    sbw_note(c->src, img * nz, SBW_GPU, NVN_SBW_FROM_COPY);
     id<MTL4ComputeCommandEncoder> b = blit();
     if (is3d)
         enc_b_copy_texture_buffer(b, t, 0, level, MTLOriginMake(c->r.xoffset, c->r.yoffset, c->r.zoffset), MTLSizeMake(c->r.width, c->r.height, nz), (__bridge id<MTLBuffer>)mb, mo, row, img);
