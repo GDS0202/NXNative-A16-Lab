@@ -1455,6 +1455,28 @@ static void power_line(uint64_t frame) {
                 (unsigned long long)(src[8]-psrc[8]), (unsigned long long)(src[9]-psrc[9]),
                 (unsigned long long)(src[10]-psrc[10]), (unsigned long long)(src[11]-psrc[11]));
         memcpy(psrc, src, sizeof src);
+        // Optional zero-sized writable storage diagnostic. Per-slot totals,
+        // sorted by the largest change in this window; no shader names,
+        // guest addresses, payload bytes or unbounded per-draw logs.
+        void mtl_sbw_scoped_diagnostics(uint64_t out[5], uint64_t slots[96]);
+        static uint64_t psc[5], psz[96];
+        uint64_t sc[5], sz[96]; mtl_sbw_scoped_diagnostics(sc, sz);
+        uint64_t first = 0, second = 0; int first_slot = -1, second_slot = -1;
+        for (int i = 0; i < 96; i++) {
+            uint64_t delta = sz[i] - psz[i];
+            if (delta > first) { second = first; second_slot = first_slot; first = delta; first_slot = i; }
+            else if (delta > second) { second = delta; second_slot = i; }
+        }
+        if (memcmp(sc, psc, sizeof sc) || first)
+            LOG("[nvn] scoped storage GPU writes up to frame %llu: bounded %llu, fallback global %llu, in-submit conflicts %llu, prior-submit conflicts %llu, table overflow %llu; zero-size RW top stage/reg %d/%d=%llu, %d/%d=%llu (TRACE required for stage/reg counts; counts are checks, not distinct writes)",
+                frame,
+                (unsigned long long)(sc[0] - psc[0]), (unsigned long long)(sc[1] - psc[1]),
+                (unsigned long long)(sc[2] - psc[2]), (unsigned long long)(sc[3] - psc[3]),
+                (unsigned long long)(sc[4] - psc[4]),
+                first_slot < 0 ? -1 : first_slot / 16, first_slot < 0 ? -1 : first_slot % 16, (unsigned long long)first,
+                second_slot < 0 ? -1 : second_slot / 16, second_slot < 0 ? -1 : second_slot % 16, (unsigned long long)second);
+        memcpy(psc, sc, sizeof sc); memcpy(psz, sz, sizeof sz);
+
         uint64_t ld, st, fu, udc = mtl_udc_saved_bytes(); mtl_bw(&ld, &st, &fu);
         void mtl_sm_stats(uint64_t *, uint64_t *, uint64_t *); static uint64_t psmp, psmc, psmw; uint64_t smp, smc, smw; mtl_sm_stats(&smp, &smc, &smw);
         void mtl_cshoist_stats(uint64_t *, uint64_t *, uint64_t *); static uint64_t pchm, pchd, pchs[8]; uint64_t chm, chd, chs[8]; mtl_cshoist_stats(&chm, &chd, chs);
