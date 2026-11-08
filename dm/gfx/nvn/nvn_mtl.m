@@ -43,6 +43,7 @@
 #include "nvn_sbw_range.h"
 #include "nvn_sbw_sparse.h"
 #include "nvn_sbw_source_diag.h"
+#include "nvn_sbw_scoped.h"
 #include "nvn_upload_window.h"
 #include "nvn_ubd_envelope.h"
 #include "nvn_ubd_page_index.h"
@@ -835,6 +836,26 @@ static upd_ent g_upd[PEND_MAX]; static int g_nupd;
 enum { SBW_N = 16384, SBW_PAGES = 4096 };
 static nvn_sbw_page g_sbwp[SBW_N];
 static uint16_t g_sbw_active[SBW_N]; // hash slot for each registered page, bounded by SBW_N.
+// Optional experiment: unknown-length STORAGE writes cover their entire
+// backing MTLBuffer, not an invented small range. Unproven/sparse cases keep
+// the former submission-wide conservative fallback.
+static nvn_sbw_scope g_sbw_scoped[NVN_SBW_SCOPE_CURRENT];
+static unsigned g_nsbw_scoped;
+static nvn_sbw_scope g_sbw_inflight[NVN_SBW_SCOPE_INFLIGHT];
+static unsigned g_nsbw_inflight;
+static _Atomic uint64_t g_sbw_scoped_stat[5]; // accepted, fallback, current hits, in-flight hits, in-flight overflow
+static _Atomic uint64_t g_sbw_zero_slots[6][16]; // zero-sized RW binding by NVN shader stage / register
+extern uint64_t nvn_sparse_gen(void);
+static int sbw_scoped_on(void) {
+    static int on = -1;
+    if (on < 0) { const char *s = getenv("DM_NVN_SBW_SCOPED"); on = s && atoi(s) != 0; }
+    return on;
+}
+void mtl_sbw_scoped_diagnostics(uint64_t out[5], uint64_t slots[96]) {
+    for (int i = 0; i < 5; i++) out[i] = atomic_load_explicit(&g_sbw_scoped_stat[i], memory_order_relaxed);
+    for (int s = 0; s < 6; s++) for (int r = 0; r < 16; r++)
+        slots[s * 16 + r] = atomic_load_explicit(&g_sbw_zero_slots[s][r], memory_order_relaxed);
+}
 static int g_nsbw, g_sbw_over;   // src: SBW_* bits; pages in the set this submission; over: a write could not be kept (too large, set full, size not known)
 static int sbw_slot(uint64_t pg, int add) {   // open addressing; −1 = not there (or no room to add)
     unsigned h = (unsigned)((pg * 0x9E3779B97F4A7C15ull) >> 50) & (SBW_N - 1);
@@ -915,8 +936,38 @@ static void sbw_note(uint64_t lo, uint64_t n, int src, int origin) {
         }
     }
 }
+// A safe bound exists only when the guest pointer is inside a CPU-visible
+// MTLBuffer allocation. On true sparse/remapped pools an alias might be at
+// another host virtual address: keep the old GLOBAL hazard, never guess.
+static void sbw_note_storage(uint64_t addr, uint64_t size, id<MTLBuffer> owner,
+                             int stage, int reg) {
+    if (!size && stage >= 0 && stage < 6 && reg >= 0 && reg < 16 && sbw_source_trace_on())
+        atomic_fetch_add_explicit(&g_sbw_zero_slots[stage][reg], 1, memory_order_relaxed);
+    if (!size && sbw_scoped_on()) {
+        uint64_t lo = 0, hi = 0, base = (uint64_t)(uintptr_t)owner.contents;
+        int sound = owner && base && !nvn_sparse_gen()
+            && nvn_sbw_scope_resolve(addr, base, (uint64_t)owner.length, &lo, &hi);
+        if (sound && nvn_sbw_scope_add(g_sbw_scoped, &g_nsbw_scoped,
+                                       NVN_SBW_SCOPE_CURRENT, lo, hi, 0)) {
+            // Preserve cumulative diagnostics and generation invalidation.
+            g_sbw_gen++;
+            atomic_fetch_add_explicit(&g_sbw_diag[SBW_D_UNKNOWN], 1, memory_order_relaxed);
+            sbw_source_count(NVN_SBW_FROM_STORAGE, NVN_SBW_SRC_NOTES);
+            sbw_source_count(NVN_SBW_FROM_STORAGE, NVN_SBW_SRC_UNKNOWN);
+            atomic_fetch_add_explicit(&g_sbw_scoped_stat[0], 1, memory_order_relaxed);
+            return;
+        }
+        atomic_fetch_add_explicit(&g_sbw_scoped_stat[1], 1, memory_order_relaxed);
+    }
+    sbw_note(addr, size, SBW_GPU, NVN_SBW_FROM_STORAGE);
+}
 static int sbw_hits(uint64_t lo, uint64_t hi) {
     if (hi <= lo) return 1; // Unknown/overflowed read: fail closed.
+    if (g_nsbw_scoped &&
+        (nvn_sparse_gen() || nvn_sbw_scope_hits(g_sbw_scoped, g_nsbw_scoped, lo, hi, 0))) {
+        if (sbw_source_trace_on()) atomic_fetch_add_explicit(&g_sbw_scoped_stat[2], 1, memory_order_relaxed);
+        return 1;
+    }
     if (!g_nsbw) return 0;
     static int fine = -1;
     if (fine < 0) { const char *e = getenv("DM_NVN_SBW_FINE"); fine = !e || atoi(e); }
@@ -948,7 +999,7 @@ static int sbw_hits(uint64_t lo, uint64_t hi) {
     return 0;
 }
 static inline unsigned pend_bucket(uint64_t page) { return (unsigned)((page * 0x9E3779B97F4A7C15ull) >> 53) & (PEND_HB - 1); }
-static void pend_reset(void) { g_npend = g_pend_over = g_nupd = g_npnode = g_nwide = g_nsbw = g_sbw_over = 0; if (!++g_pend_gen) { memset(g_pend_hgen, 0, sizeof g_pend_hgen); memset(g_sbwp, 0, sizeof g_sbwp); g_pend_gen = 1; } }
+static void pend_reset(void) { g_nsbw_scoped = 0; g_npend = g_pend_over = g_nupd = g_npnode = g_nwide = g_nsbw = g_sbw_over = 0; if (!++g_pend_gen) { memset(g_pend_hgen, 0, sizeof g_pend_hgen); memset(g_sbwp, 0, sizeof g_sbwp); g_pend_gen = 1; } }
 static void vc_gpu_write(uint64_t dst, uint64_t n);   // kept index ranges under the written range are not trusted again (ix_range)
 static int pend_add(uint64_t dst, uint64_t n, int kind) {
     vc_gpu_write(dst, n);
@@ -1386,6 +1437,11 @@ static void gw_put(uint64_t lo, uint64_t hi, uint64_t fence, uint64_t done) {
 static int gw_live(uint64_t lo, uint64_t hi) {
     uint64_t done = g_done;   // read without the lock as elsewhere: a stale value only refuses more
     if (g_gw_all > done) return 1;
+    if (g_nsbw_inflight &&
+        (nvn_sparse_gen() || nvn_sbw_scope_hits(g_sbw_inflight, g_nsbw_inflight, lo, hi, done))) {
+        if (sbw_source_trace_on()) atomic_fetch_add_explicit(&g_sbw_scoped_stat[3], 1, memory_order_relaxed);
+        return 1;
+    }
     for (uint64_t pg = lo >> 12; pg <= (hi - 1) >> 12; pg++) { unsigned s = gw_slot(pg); if ((g_gw[s].page == pg || g_gw[s].page == ~0ull) && g_gw[s].fence > done) return 1; }
     return 0;
 }
@@ -1393,6 +1449,17 @@ static int gw_live(uint64_t lo, uint64_t hi) {
 static void gw_commit(uint64_t fence) {
     uint64_t done = g_done;
     if ((g_pend_over || g_sbw_over) && fence > g_gw_all) g_gw_all = fence;
+    // Preserve whole-allocation hazards through in-flight GPU fences.
+    // If the bounded table is exhausted, fall back to the original global fence.
+    g_nsbw_inflight = nvn_sbw_scope_prune(g_sbw_inflight, g_nsbw_inflight, done);
+    for (unsigned i = 0; i < g_nsbw_scoped; i++)
+        if (!nvn_sbw_scope_add(g_sbw_inflight, &g_nsbw_inflight,
+                               NVN_SBW_SCOPE_INFLIGHT,
+                               g_sbw_scoped[i].lo, g_sbw_scoped[i].hi, fence)) {
+            if (fence > g_gw_all) g_gw_all = fence;
+            atomic_fetch_add_explicit(&g_sbw_scoped_stat[4], 1, memory_order_relaxed);
+            break;
+        }
     for (int e = 0; e < g_npend; e++) gw_put(g_pend_lo[e], g_pend_hi[e], fence, done);
     // The active-slot list is built alongside the hash table and reset at
     // each submission. Unlike scanning all 16,384 slots, this touches only
@@ -1985,6 +2052,9 @@ static void alias_take_over(const alias_key *nk) {
     nvn_texlayout L; nvn_tex_layout(&nk->d, &L);
     if (!L.size) return;
     int64_t lo = nk->off, hi = nk->off + (int64_t)L.size;
+    // Drain ALL eligible overlapping aliases, not just the first 16.
+    // Rarely more than one batch; keep the hot path allocation-free.
+    for (;;) {
     uint32_t n = 0; alias_key ks[16];
     for (uint32_t i = 0; i < g_alias.cap && n < 16; i++) {
         if (!g_alias.vals[i]) continue;
@@ -2004,6 +2074,8 @@ static void alias_take_over(const alias_key *nk) {
         if (serial_holds(&g_ghost, o)) defer_obj_unref(o); else defer_obj_release(o);
     }
     if (n) { g_ser_gen++; g_alias_taken += n; }
+    if (n < 16) break;
+    }
 }
 static __unsafe_unretained id serial_get(uint64_t k) { pthread_mutex_lock(&g_smu); __unsafe_unretained id o = hm_get_id(&g_by_serial, &k); pthread_mutex_unlock(&g_smu); return o; }
 static void serial_put(uint64_t k, id o) {
@@ -7345,7 +7417,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
         } else if (b->kind == NVN_RB_SBUFP || b->kind == NVN_RB_UBOP) {   // B: storage buffers / compute-stage uniforms are device pointers; the address is taken by NVN slot
             const p_bind_buf *u = reg < 16 ? (b->kind == NVN_RB_UBOP ? &S.ubo[nvn_stage][reg] : &S.ssbo[nvn_stage][reg]) : NULL;
             void *mb; uint64_t mo, gpu;
-            if (u && u->addr && mtl_gpu_addr(u->addr, u->size ? u->size : 1, &mb, &mo, &gpu)) { slots[aid] = gpu; USE((__bridge id<MTLBuffer>)mb, b->rw ? MTLResourceUsageRead | MTLResourceUsageWrite : MTLResourceUsageRead); if (b->rw && b->kind == NVN_RB_SBUFP && !(reg < 32 && (sh->sb_ro >> reg & 1))) sbw_note(u->addr, u->size, SBW_GPU, NVN_SBW_FROM_STORAGE); }   // cb_extent.tsv: slots the shader never writes
+            if (u && u->addr && mtl_gpu_addr(u->addr, u->size ? u->size : 1, &mb, &mo, &gpu)) { slots[aid] = gpu; USE((__bridge id<MTLBuffer>)mb, b->rw ? MTLResourceUsageRead | MTLResourceUsageWrite : MTLResourceUsageRead); if (b->rw && b->kind == NVN_RB_SBUFP && !(reg < 32 && (sh->sb_ro >> reg & 1))) sbw_note_storage(u->addr, u->size, (__bridge id<MTLBuffer>)mb, nvn_stage, reg); }   // cb_extent.tsv: slots the shader never writes
             else { slots[aid] = dummy_buf_gpu(); USE(dummy_buf(), MTLResourceUsageRead); }
             if (bl) PD("B %llu st%d sbufp reg%d %s addr=%#llx size=%llu %s", g_stat_pass, nvn_stage, reg, u && u->addr ? "real" : "dummy", u ? (unsigned long long)u->addr : 0ull, u ? (unsigned long long)u->size : 0ull, b->rw ? "rw" : "ro");
         } else if (b->kind == NVN_RB_SBUFU) {   // B: a storage buffer whose GPU address the game keeps in its own uniform buffer (Monster Hunter Rise's compute shaders: c3 + 0x38); read like a bindless handle
