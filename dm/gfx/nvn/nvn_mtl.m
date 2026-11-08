@@ -495,6 +495,7 @@ void mtl_write_capabilities(void) {
         NSMutableDictionary *choices = [NSMutableDictionary dictionary];
         const char *settings[] = {"DM_RENDER_SCALE", "DM_DYNAMIC_RESOLUTION", "DM_OPMODE", "DM_OUTPUT_HEIGHT", "DM_FPS_TARGET",
             "DM_PRESENT_UPSCALE", "DM_PRESENT_SNAP", "DM_PSO_MTL4", "DM_PSO_PREBUILD", "DM_PSO_ARCH_ASYNC", "DM_NVN_ENC_THREAD", "DM_FPS_HOLD",
+            "DM_NVN_SBW_FINE", "DM_NVN_SBW_TRACE", "DM_NVN_SBW_SCOPED", "DM_NVN_CPU_READ_NORES", "DM_NVN_RT_VIEW_UPGRADE",
             "DM_BC_WORKERS", "DM_BC_ASTC", "DM_BC_CACHE", "DM_PSO_PREPARE_THREADS", "DM_PSO_USER_WARM", "DM_PSO_USER_WARM_LIMIT",
             "DM_AUTO_QUALITY", "DM_AUTO_MIN_HEIGHT", "DM_AUTO_TEXTURE", "DM_AUTO_VIEW", "DM_AUTO_VIEW_FLOOR", "DM_VIEW_DISTANCE", "DM_TEXTURE_DETAIL", "DM_RENDER_FIXED", "DM_MEM_GUARD", "DM_THERMAL_CAP", NULL};
         for (int i = 0; settings[i]; i++) {
@@ -504,6 +505,10 @@ void mtl_write_capabilities(void) {
         }
         NSDictionary *info = NSBundle.mainBundle.infoDictionary;
         dm_tuning_snapshot tuning = dm_tuning_read();
+        // Report what the renderer really sees after the launcher applies
+        // settings; a saved or later-uploaded env.txt is not sufficient proof.
+        const char *scope = getenv("DM_NVN_SBW_SCOPED"), *cpu = getenv("DM_NVN_CPU_READ_NORES");
+        const char *rtview = getenv("DM_NVN_RT_VIEW_UPGRADE");
         NSDictionary *caps = @{ @"schema": @2, @"os_version": NSProcessInfo.processInfo.operatingSystemVersionString,
             @"trace_session": @(nvn_stutter_session()), @"shader_chain": @DMSH_CHAIN,
             @"shader_inputs_stamp_sha256": diagnostic_stamp([NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:[NSString stringWithFormat:@"msl/b-%s/inputs.tsv", DMSH_CHAIN]]),
@@ -513,7 +518,12 @@ void mtl_write_capabilities(void) {
             @"runtime_tuning": @{@"automatic": @(tuning.requested.automatic), @"requested_fps": @(tuning.requested.target), @"scale_percent": @(tuning.scale), @"texture_filter": @(tuning.texture), @"output_height": @(tuning.requested.output)},
             @"source_revision": info[@"NXNativeSourceRevision"] ?: @"not-recorded",
             @"game_id": info[@"NXNativeGameId"] ?: @"not-recorded", @"game_package": info[@"NXNativeGamePackage"] ?: @"not-recorded",
-            @"settings_environment": choices, @"metal_device": device.name ?: @"unknown",
+            @"settings_environment": choices,
+             @"experimental_runtime": @{
+                 @"scoped_storage_on": @(scope && atoi(scope) != 0),
+                 @"cpu_read_no_gpu_residency_on": @(!cpu || atoi(cpu) != 0),
+                 @"render_target_view_upgrade_on": @(rtview && atoi(rtview) != 0)},
+             @"metal_device": device.name ?: @"unknown",
             @"metal4": @([device supportsFamily:MTLGPUFamilyMetal4]), @"apple7": @([device supportsFamily:MTLGPUFamilyApple7]),
             @"apple8": @([device supportsFamily:MTLGPUFamilyApple8]), @"apple9": @([device supportsFamily:MTLGPUFamilyApple9]),
             @"metalfx_spatial": @([MTLFXSpatialScalerDescriptor supportsDevice:device]),
