@@ -43,6 +43,8 @@ jobs:
           /tmp/pend-candidates
           clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_sbw_source_diag.c -o /tmp/sbw-source-diag
           /tmp/sbw-source-diag
+          clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_sbw_scoped.c -o /tmp/sbw-scoped
+          /tmp/sbw-scoped
           clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_sbw_sparse.c -o /tmp/sbw-sparse
           /tmp/sbw-sparse
           clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_pso_retry.c -o /tmp/pso-retry
