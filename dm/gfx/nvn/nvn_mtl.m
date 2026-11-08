@@ -343,7 +343,11 @@ static void mem_sample(int event) {
     atomic_store(&g_mem_pressure, policy.pressure);
     atomic_store(&g_mem_reason, policy.reason);
     if ((lv == 2 && was < 2) || (policy.pressure && !pressure_was)) mem_flush(nvn_memory_reason(policy.reason), left);
-    nvn_bc_cache_pressure(MAX(lv, policy.pressure));
+    // Prevent optional ASTC disk-cache writes (and their transient copies)
+    // before iOS reaches the critical FPS-cap threshold. Decoding still works.
+    int cache_pressure = MAX(lv, policy.pressure);
+    if (left < (1024ull << 20) && cache_pressure < 1) cache_pressure = 1;
+    nvn_bc_cache_pressure(cache_pressure);
     if (lv != last_logged || policy.reason != last_reason || event != NVN_MEM_POLL) {
         last_logged = lv; last_reason = policy.reason;
         MLOG("memory guard: level %d, reason=%s, os_pressure=%d, headroom=%zu MiB, cap=%s, reported reclaimed=%llu MiB", lv, nvn_memory_reason(policy.reason), policy.pressure, left >> 20, lv ? "30" : "game target", (unsigned long long)(atomic_load(&g_mem_reclaimed) >> 20));
@@ -761,6 +765,16 @@ typedef struct { uint64_t lo, hi; } cpu_pc_ent;
 static __thread struct { uint64_t gen; unsigned next; cpu_pc_ent e[CPU_PC_N], recent[CPU_PC_RECENT]; } t_cpu_pc;
 static int mtl_cpu_copy(uint64_t addr, uint64_t n, void *out) {
     if (!out || !n || addr > UINT64_MAX - n) return 0;
+    // Restore the original conservative GPU-resident path for same-scene A/B
+    // and unexpected games whose pool lifetime differs from BOTW.
+    static int nores = -1;
+    if (nores < 0) { const char *env = getenv("DM_NVN_CPU_READ_NORES"); nores = !env || atoi(env) != 0; }
+    if (!nores) {
+        void *mb; uint64_t offset;
+        if (!mtl_addr(addr, n, &mb, &offset)) return 0;
+        memcpy(out, (const uint8_t *)((__bridge id<MTLBuffer>)mb).contents + offset, (size_t)n);
+        return 1;
+    }
     uint64_t end = addr + n;
     uint64_t gen = atomic_load_explicit(&g_pool_gen, memory_order_acquire);
     if (t_cpu_pc.gen != gen) {
