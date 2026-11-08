@@ -92,6 +92,8 @@ t_ubd_page_index: t_ubd_page_index.c ../nvn/nvn_ubd_page_index.h ../nvn/nvn_ubd_
 t_pend_candidates: t_pend_candidates.c ../nvn/nvn_pend_candidates.h
 	clang $(CFLAGS) -o $@ t_pend_candidates.c
 
+t_sbw_scoped: t_sbw_scoped.c ../nvn/nvn_sbw_scoped.h
+	clang $(CFLAGS) -o $@ t_sbw_scoped.c
 t_sbw_source_diag: t_sbw_source_diag.c ../nvn/nvn_sbw_source_diag.h
 	clang $(CFLAGS) -o $@ t_sbw_source_diag.c
 t_sbw_range: t_sbw_range.c ../nvn/nvn_sbw_range.h
