@@ -43,6 +43,7 @@
 #include "nvn_sbw_range.h"
 #include "nvn_sbw_sparse.h"
 #include "nvn_upload_window.h"
+#include "nvn_ubd_envelope.h"
 #include "nvn_sampler_quality.h"
 #include "nvn_archive_route.h"
 #include "dmsh_chain.h"   // DMSH_CHAIN: the translation chain version of the B shader library expected by this source tree, one for every game (beside this file, tools/dmsh_chain.py --header)
@@ -1281,14 +1282,19 @@ static int ubd_lazy(void) { static int v = -1; if (v < 0) { const char *e = gete
 enum { UBD_PF = 1024 };
 static uint64_t g_ubd_pf[UBD_PF];   // pages (address >> 12, +1) the deferred updates touch, open addressing; cleared when the list is landed
 static int g_ubd_wide;              // an update spans more than 16 pages: the filter is skipped
+static nvn_ubd_envelope g_ubd_env = NVN_UBD_ENVELOPE_INITIALIZER;
 static inline unsigned ubd_pf_slot(uint64_t pg) { return (unsigned)((pg * 0x9E3779B97F4A7C15ull) >> 54) & (UBD_PF - 1); }
 static void ubd_pf_add(uint64_t lo, uint64_t hi) {
+    nvn_ubd_envelope_add(&g_ubd_env, lo, hi);
     if (((hi - 1) >> 12) - (lo >> 12) > 16) { g_ubd_wide = 1; return; }
     for (uint64_t pg = lo >> 12; pg <= (hi - 1) >> 12; pg++) { unsigned k = ubd_pf_slot(pg);
         while (g_ubd_pf[k] && g_ubd_pf[k] != pg + 1) k = (k + 1) & (UBD_PF - 1);
         g_ubd_pf[k] = pg + 1; }
 }
 static inline int ubd_pf_hit(uint64_t lo, uint64_t hi) {
+    // Fast negative proof before probing the per-page filter. The envelope
+    // can have false positives in gaps but cannot omit any deferred update.
+    if (!nvn_ubd_envelope_may_overlap(&g_ubd_env, lo, hi)) return 0;
     if (g_ubd_wide || ((hi - 1) >> 12) - (lo >> 12) > 16) return 1;
     for (uint64_t pg = lo >> 12; pg <= (hi - 1) >> 12; pg++) { unsigned k = ubd_pf_slot(pg);
         while (g_ubd_pf[k]) { if (g_ubd_pf[k] == pg + 1) return 1; k = (k + 1) & (UBD_PF - 1); } }
@@ -1319,6 +1325,7 @@ static uint64_t ubd_shadow(uint64_t lo, uint64_t hi) {
 // Encode the deferred copies in order (rp_end, once the pass has ended)
 static void ubd_flush(void) {
     int n = g_nubd; g_nubd = 0; memset(g_ubd_pf, 0, sizeof g_ubd_pf); g_ubd_wide = 0;
+    nvn_ubd_envelope_reset(&g_ubd_env);
     for (int i = 0; i < n; i++) { const ubd_ent *e = &g_ubd[i]; void *db; uint64_t dof;
         if (!mtl_addr(e->lo, e->hi - e->lo, &db, &dof)) continue;
         enc_b_copy_buffer(blit_buf(0, 0, e->lo, e->hi), e->buf, e->off, (__bridge id<MTLBuffer>)db, dof, e->hi - e->lo); g_gp_ubd++; }
