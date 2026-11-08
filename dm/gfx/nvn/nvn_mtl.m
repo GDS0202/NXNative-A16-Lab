@@ -45,6 +45,7 @@
 #include "nvn_upload_window.h"
 #include "nvn_ubd_envelope.h"
 #include "nvn_ubd_page_index.h"
+#include "nvn_pend_candidates.h"
 #include "nvn_sampler_quality.h"
 #include "nvn_archive_route.h"
 #include "dmsh_chain.h"   // DMSH_CHAIN: the translation chain version of the B shader library expected by this source tree, one for every game (beside this file, tools/dmsh_chain.py --header)
@@ -1371,24 +1372,44 @@ static void gw_commit(uint64_t fence) {
     }
 }
 // The writes queued in this submission from index since on that overlap [a, b), newest first, into out (room for every entry a lookup can meet); -1 when they cannot all be told
+enum { UBP_IDX_CAP = PEND_NODES + PEND_WIDE };
 static int pend_since(uint64_t a, uint64_t b, int since, int *out) {
     if (g_pend_over) return -1;
     int n = 0; uint64_t p0 = a >> 12, p1 = (b - 1) >> 12;
-    if (p1 - p0 >= PEND_SPAN) { for (int e = g_npend - 1; e >= since; e--) if (a < g_pend_hi[e] && g_pend_lo[e] < b) out[n++] = e; return n; }   // every entry, newest first
-    for (int i = 0; i < g_nwide; i++) { int e = g_pend_wide[i]; if (e >= since && a < g_pend_hi[e] && g_pend_lo[e] < b) out[n++] = e; }
-    for (uint64_t pg = p0; pg <= p1; pg++) { unsigned bk = pend_bucket(pg); if (g_pend_hgen[bk] != g_pend_gen) continue;
-        for (int k = g_pend_head[bk]; k >= 0 && g_pend_node[k].e >= since; k = g_pend_node[k].next) { int e = g_pend_node[k].e; if (a < g_pend_hi[e] && g_pend_lo[e] < b) out[n++] = e; } }   // chains run newest first
-    if (n > 1 && (g_nwide || p1 > p0)) {   // several lists: newest first, each once
-        for (int i = 1; i < n; i++) { int v = out[i], j = i; while (j > 0 && out[j - 1] < v) { out[j] = out[j - 1]; j--; } out[j] = v; }
-        int m = 1; for (int i = 1; i < n; i++) if (out[i] != out[m - 1]) out[m++] = out[i];
-        n = m; }
-    return n;
+    if (p1 - p0 >= PEND_SPAN) {
+        for (int e = g_npend - 1; e >= since; e--) if (a < g_pend_hi[e] && g_pend_lo[e] < b) {
+            n = nvn_pend_candidate_add(out, n, UBP_IDX_CAP, e);
+            if (n < 0) return -1; // Uncertain: refuse the CPU shadow, do not overrun.
+        }
+        return n; // Already newest first, each pending write examined once.
+    }
+    for (int i = 0; i < g_nwide; i++) {
+        int e = g_pend_wide[i];
+        if (e >= since && a < g_pend_hi[e] && g_pend_lo[e] < b) {
+            n = nvn_pend_candidate_add(out, n, UBP_IDX_CAP, e);
+            if (n < 0) return -1;
+        }
+    }
+    for (uint64_t pg = p0; pg <= p1; pg++) {
+        unsigned bk = pend_bucket(pg);
+        if (g_pend_hgen[bk] != g_pend_gen) continue;
+        for (int k = g_pend_head[bk]; k >= 0 && g_pend_node[k].e >= since; k = g_pend_node[k].next) {
+            int e = g_pend_node[k].e;
+            if (a < g_pend_hi[e] && g_pend_lo[e] < b) {
+                n = nvn_pend_candidate_add(out, n, UBP_IDX_CAP, e);
+                if (n < 0) return -1;
+            }
+        }
+    }
+    // Merge the page chains and wide list. The old insertion sort could
+    // perform quadratically many comparisons before removing duplicate writes.
+    return nvn_pend_candidates_finish(out, n, g_nwide || p1 > p0);
 }
 int nvn_host_readable(uint64_t a, uint64_t n);   // hle_nvn.c: guest memory and sparse pools
 // Shadows made from memory, per range. One is kept while no write is queued after it (the draws after an update bind the same block again and again); the next one for the same range starts
 // from it and lays over only the writes queued since (the game rewrites one block hundreds of times a submission). A range read whole from memory once is not read from memory again in the submission
 enum { UBP_CACHE = 16, UBP_MAX_BYTES = 65536 };
-static int g_ubp_idx[PEND_MAX + PEND_WIDE];   // every entry a lookup can meet: the chains of the range's pages hold each entry at most once after dedup, the wide list at most PEND_WIDE
+static int g_ubp_idx[UBP_IDX_CAP];   // page chains can duplicate entries before sorting; every append is bounded, overflow fails closed.
 typedef struct { uint64_t lo, hi, gpu; uint8_t *cpu; int npend; uint32_t gen, sbw; uint64_t ready; } ubp_ent;   // sbw: g_sbw_gen when the other writes were last checked; ready: copy ops that fill it (ubc_push)
 static uint64_t g_ubp_ready;   // ready of the shadow ubp_get returned last (a CPU read of it waits for that: ubc_wait)
 static ubp_ent g_ubpc[UBP_CACHE]; static unsigned g_ubpc_i;
