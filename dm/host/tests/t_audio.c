@@ -124,6 +124,9 @@ int main(void) {
         test_output_lifetime()) return 1;
     char out[64], ev[64]; uint8_t prm[16]; gbuf b[3]; static int16_t pcm[3][4800 * 2];
     h_au_InitParam(prm);
+    // The preceding synthetic batching test sent one valid notification.
+    // Reset its counter before measuring this independent playback scenario.
+    atomic_store_explicit(&g_sig, 0, memory_order_release);
     if (h_au_Open(out, ev, NULL, prm)) return 1;
     if (h_au_Ch(out) != 2 || h_au_Rate(out) != 48000 || h_au_State(out) != STATE_STOPPED) { puts("FAIL parameters"); return 1; }
     for (int i = 0; i < 3; i++) { h_au_SetBuf(&b[i], pcm[i], sizeof pcm[i], sizeof pcm[i]); if (!h_au_Append(out, &b[i])) return 1; }
