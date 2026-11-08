@@ -19,6 +19,8 @@ VARIANTS = {
     'classic-pso': {'DM_PSO_MTL4': '0'}, 'full-prebuild': {'DM_PSO_PREBUILD': '1'},
     'hold-off': {'DM_FPS_HOLD': 'off'}, 'metalfx': {'DM_PRESENT_UPSCALE': 'metalfx'},
     'cap-30': {'DM_FPS_TARGET': '30'}, 'recording-off': {'DM_STUTTER': '0'},
+    # Candidate PR #5 only: a controlled old-4KiB-vs-fine-16B hazard comparison.
+    'sbw-fine': {'DM_NVN_SBW_FINE': '1'}, 'sbw-page': {'DM_NVN_SBW_FINE': '0'},
 }
 
 
