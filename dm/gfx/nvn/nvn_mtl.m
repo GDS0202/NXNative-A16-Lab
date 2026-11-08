@@ -752,6 +752,47 @@ int mtl_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off) {
     pthread_mutex_unlock(&g_mu);
     return ok;
 }
+// CPU-only NVN constant/handle reads must not mark a NO-COPY pool GPU
+// resident. A GPU binding still uses mtl_addr()/mtl_gpu_addr() and registers
+// residency before encoding. Keep a separate generation-validated lookup
+// cache: sharing t_pc would let GPU accesses incorrectly skip pool_res().
+enum { CPU_PC_N = 256, CPU_PC_RECENT = 8 };
+typedef struct { uint64_t lo, hi; } cpu_pc_ent;
+static __thread struct { uint64_t gen; unsigned next; cpu_pc_ent e[CPU_PC_N], recent[CPU_PC_RECENT]; } t_cpu_pc;
+static int mtl_cpu_copy(uint64_t addr, uint64_t n, void *out) {
+    if (!out || !n || addr > UINT64_MAX - n) return 0;
+    uint64_t end = addr + n;
+    uint64_t gen = atomic_load_explicit(&g_pool_gen, memory_order_acquire);
+    if (t_cpu_pc.gen != gen) {
+        memset(&t_cpu_pc, 0, sizeof t_cpu_pc);
+        t_cpu_pc.gen = gen;
+    }
+    unsigned slot = (unsigned)(((addr >> 12) * 0x9E3779B97F4A7C15ull) >> 56);
+    cpu_pc_ent *e = &t_cpu_pc.e[slot];
+    if (addr >= e->lo && end <= e->hi) { memcpy(out, (const void *)(uintptr_t)addr, (size_t)n); return 1; }
+    for (unsigned i = 0; i < CPU_PC_RECENT; i++) {
+        cpu_pc_ent x = t_cpu_pc.recent[i];
+        if (addr >= x.lo && end <= x.hi) {
+            *e = x;
+            memcpy(out, (const void *)(uintptr_t)addr, (size_t)n);
+            return 1;
+        }
+    }
+    int ok = 0;
+    pthread_mutex_lock(&g_mu);
+    int i = pool_find(addr, n);
+    if (i >= 0) {
+        // The guest pool wraps the same CPU address through newBufferWithBytesNoCopy.
+        // Copy under g_mu on the cold path, not after the pool can be finalized.
+        memcpy(out, (const void *)(uintptr_t)addr, (size_t)n);
+        cpu_pc_ent x = {g_pools[i].lo, g_pools[i].hi};
+        t_cpu_pc.e[slot] = x;
+        t_cpu_pc.recent[t_cpu_pc.next++ % CPU_PC_RECENT] = x;
+        ok = 1;
+    }
+    pthread_mutex_unlock(&g_mu);
+    return ok;
+}
 int mtl_gpu_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off, uint64_t *gpu) {
     const pc_ent *c = pc_get(addr, len);
     if (c) { *buf = (__bridge void *)c->buf; *off = addr - c->base; *gpu = c->gpu + *off; return 1; }
@@ -7237,9 +7278,9 @@ static void ubo_read(int stage, int reg, int off, size_t n, void *out) {
     if (pend_hits(u->addr + off, n)) { int kind; if (pend_read(u->addr + off, n, out, &kind)) return;   // written by an inline update queued in this submission: its data
         RED_ONCE(47, "the uniform buffer holding bindless handles (stage %d slot %d +%#x) has GPU-side writes in this submission (%s): the current value is read", stage, reg, off,
                  kind == 2 ? "a buffer copy" : kind == 3 ? "a fill" : kind == 1 ? "an inline update covering part of it" : "more writes than the host tracks"); }
-    void *mb; uint64_t mo; const uint8_t *base;
-    if (!mtl_addr(u->addr + off, n, &mb, &mo) || !(base = [(__bridge id<MTLBuffer>)mb contents])) return;
-    memcpy(out, base + mo, n);
+    // Handle-table reads are CPU-only. Do not wire an otherwise unused GPU
+    // memory pool merely to fetch a few guest bytes.
+    mtl_cpu_copy(u->addr + off, n, out);
 }
 static uint32_t ubo_handle(int stage, int reg, int off) { uint32_t h; ubo_read(stage, reg, off, 4, &h); return h; }
 // A handle read from a uniform buffer names IDs of the pools bound when the draw runs: as bound handles are moved at recording (hle_nvn.c bind_handles), these take the bases here (0 = none)
@@ -8787,9 +8828,7 @@ static int ubo_float(int slot, uint16_t ref, float *out) {   // Component cmp of
     if (slot < 0 || slot >= 6 || sl < 0 || sl >= 16) return 0;
     const p_bind_buf *u = &S.ubo[slot][sl]; uint64_t off = (uint64_t)vec * 16 + (uint64_t)cmp * 4;
     if (!u->addr || off + 4 > u->size || pend_hits(u->addr + off, 4)) return 0;
-    void *mb; uint64_t mo; const uint8_t *base;
-    if (!mtl_addr(u->addr + off, 4, &mb, &mo) || !(base = [(__bridge id<MTLBuffer>)mb contents])) return 0;
-    memcpy(out, base + mo, 4); return 1;
+    return mtl_cpu_copy(u->addr + off, 4, out);
 }
 static int zskip_fact_for(const char *key, zskip_fact *out) {
     if (!key) return 0;
