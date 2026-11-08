@@ -21,6 +21,8 @@ static BOOL fixed_key(NSString *key) {
 @property (nonatomic, strong) NSTimer *ticker;
 @property (nonatomic, assign) uint64_t changesAtStart;
 + (void)showOnView:(UIView *)container;
+- (void)refresh;
+- (void)hide;
 @end
 @implementation DmBenchmarkHUD
 + (void)showOnView:(UIView *)container {
