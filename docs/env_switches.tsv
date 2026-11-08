@@ -102,6 +102,7 @@ DM_NVN_CBLOG	diagnostic	`=1` logs the command memory the game adds to command bu
 DM_NVN_CLEARLOG	diagnostic	`=1` logs the first 40 colour clears drawn as a triangle (inside a pass, with a partial channel mask or a partial scissor)
 DM_NVN_CMDSTAT	diagnostic	`=1` logs every 300 frames the command recording usage: bytes and records per frame, command memory segment sizes, out-of-memory callbacks, host segments, count and bytes per command type
 DM_NVN_CPUPROF	diagnostic	1 records CPU wall/time/instruction totals by renderer operation; off by default.
+DM_NVN_CPU_READ_NORES	switch	`1` (default): CPU-only guest constant/handle reads use a separate, generation-validated pool lookup and avoid promoting the memory pool into Metal GPU residency. `0` restores the previous GPU-resident lookup for A/B tests; actual GPU bindings are unchanged.
 DM_NVN_CS_HOIST	switch	`0` makes a compute dispatch between the draws of a pass end it (on by default: the dispatch runs ahead of the pass when that changes nothing the draws before it read)
 DM_NVN_CUT	switch	`=<draws>`: the replay commits its command buffer every that many draws, between passes (default 64; `0` one command buffer per submission, except the cut after a buffer-to-texture copy)
 DM_NVN_DEFER	switch	`0` turns off the deferred pass merging of the TBDR optimizations (which run only with `DM_NVN_TBDR=1`)
@@ -149,6 +150,7 @@ DM_NVN_REGLUM	diagnostic	`=x0,y0,x1,y1:<file>` (normalized coordinates): on ever
 DM_NVN_RT_RANGE	switch	`=1` (experimental, off by default; with `DM_NVN_TBDR=1`) keeps the pass open when the game sets the same colour and depth target again with a view that differs only in its level count
 DM_NVN_RT_RANGE_CHECK	diagnostic	With `DM_NVN_RT_RANGE=1` and `DM_NVN_PASSDUMP`, renders a candidate pass both ways in the same frame and logs and writes the comparison (`CHECK_RESULTS.tsv`, `[RED]` on a difference)
 DM_NVN_SBW_FINE	switch	`0` restores conservative 4 KiB GPU-write overlap checks for uniform shadows; default tracks known writes in 16-byte tiles and retains the original fail-closed behavior for unknown/overflowed writes. Use for A/B render-pass correctness and FPS comparisons.
+DM_NVN_SBW_SCOPED	switch	`1` (experimental; OFF by default) tracks zero-sized writable storage buffer bindings by the WHOLE backing Metal buffer allocation, across submissions until GPU fences complete. Sparse/remapped/invalid or full tables fall back to the old fail-closed GLOBAL hazard. `0` restores the prior behavior; device rendering validation required.
 DM_NVN_SBW_TRACE	diagnostic	`=1` enables opt-in aggregate GPU-write origin counters (storage, bindless and texture-to-buffer copy), recorded in per-window NVN logs; adds atomic overhead, no addresses or per-draw dumps, and never relaxes hazards. Off by default.
 DM_NVN_SHDUMP	diagnostic	`=<dir>` saves programs missing from the shader map as `<key>.ctl` (control section) and `<key>.code`, to find the files that hold them
 DM_NVN_SHMAP	path	The shader map (`shader_map.tsv`); `c1_full.tsv` and `pso_manifest.tsv` are taken from the same folder. Default: the game profile's folder on the Mac; the iOS app sets it
