@@ -13,6 +13,89 @@ static BOOL fixed_key(NSString *key) {
     return NO;
 }
 
+// The measurement runs on the actual presentation clock while the user plays.
+// Keep a small non-modal readout on the game screen; the graphics sheet closes,
+// so leaving the result only in the sheet made the command seem ineffective.
+@interface DmBenchmarkHUD : UIView
+@property (nonatomic, strong) UILabel *statusLabel;
+@property (nonatomic, strong) NSTimer *ticker;
+@property (nonatomic, assign) uint64_t changesAtStart;
++ (void)showOnView:(UIView *)container;
+- (void)refresh;
+- (void)hide;
+@end
+@implementation DmBenchmarkHUD
++ (void)showOnView:(UIView *)container {
+    if (!container) return;
+    for (UIView *child in [container.subviews copy])
+        if ([child isKindOfClass:DmBenchmarkHUD.class]) [(DmBenchmarkHUD *)child hide];
+    DmBenchmarkHUD *hud = [DmBenchmarkHUD new];
+    hud.changesAtStart = dm_tuning_read().changes;
+    hud.backgroundColor = [UIColor.blackColor colorWithAlphaComponent:0.84];
+    hud.layer.cornerRadius = 12;
+    hud.clipsToBounds = YES;
+    hud.translatesAutoresizingMaskIntoConstraints = NO;
+
+    UILabel *label = [UILabel new];
+    label.font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightMedium];
+    label.textColor = UIColor.whiteColor;
+    label.numberOfLines = 0;
+    label.translatesAutoresizingMaskIntoConstraints = NO;
+    hud.statusLabel = label;
+    [hud addSubview:label];
+
+    UIButton *hide = [UIButton buttonWithType:UIButtonTypeSystem];
+    [hide setTitle:@"Hide" forState:UIControlStateNormal];
+    [hide setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    hide.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
+    hide.accessibilityLabel = @"Hide benchmark overlay";
+    hide.translatesAutoresizingMaskIntoConstraints = NO;
+    [hide addTarget:hud action:@selector(hide) forControlEvents:UIControlEventTouchUpInside];
+    [hud addSubview:hide];
+
+    [container addSubview:hud];
+    [NSLayoutConstraint activateConstraints:@[
+        [hud.centerXAnchor constraintEqualToAnchor:container.centerXAnchor],
+        [hud.topAnchor constraintEqualToAnchor:container.safeAreaLayoutGuide.topAnchor constant:8],
+        [hud.widthAnchor constraintEqualToConstant:MIN(350.0, MAX(240.0, container.bounds.size.width - 24.0))],
+        [hud.heightAnchor constraintGreaterThanOrEqualToConstant:66],
+        [label.leadingAnchor constraintEqualToAnchor:hud.leadingAnchor constant:12],
+        [label.topAnchor constraintEqualToAnchor:hud.topAnchor constant:8],
+        [label.bottomAnchor constraintEqualToAnchor:hud.bottomAnchor constant:-8],
+        [label.trailingAnchor constraintEqualToAnchor:hide.leadingAnchor constant:-8],
+        [hide.trailingAnchor constraintEqualToAnchor:hud.trailingAnchor constant:-10],
+        [hide.widthAnchor constraintEqualToConstant:39],
+        [hide.centerYAnchor constraintEqualToAnchor:hud.centerYAnchor]
+    ]];
+    [hud refresh];
+    __weak DmBenchmarkHUD *weakHUD = hud;
+    hud.ticker = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *timer) {
+        DmBenchmarkHUD *strongHUD = weakHUD;
+        if (!strongHUD) { [timer invalidate]; return; }
+        [strongHUD refresh];
+    }];
+}
+- (void)refresh {
+    dm_tuning_snapshot s = dm_tuning_read();
+    if (s.measuring) {
+        double elapsed = s.measured_seconds > 30.0 ? 30.0 : s.measured_seconds;
+        self.statusLabel.text = [NSString stringWithFormat:@"Measuring scene %.1f / 30 s\n%d frames · %.1f FPS live",
+                                 elapsed, s.measured_frames, s.measured_fps];
+    } else if (s.measured_complete) {
+        unsigned long long changes = s.changes >= self.changesAtStart ?
+            (unsigned long long)(s.changes - self.changesAtStart) : 0;
+        self.statusLabel.text = [NSString stringWithFormat:@"30 s done: %.1f FPS · P95 %.1f ms\n%d frames · %llu automatic changes",
+                                 s.measured_fps, s.measured_p95, s.measured_frames, changes];
+        [self.ticker invalidate]; self.ticker = nil;
+    } else {
+        self.statusLabel.text = @"Measurement interrupted\nSetting changed or scene was suspended";
+        [self.ticker invalidate]; self.ticker = nil;
+    }
+}
+- (void)hide { [self.ticker invalidate]; self.ticker = nil; [self removeFromSuperview]; }
+- (void)dealloc { [self.ticker invalidate]; }
+@end
+
 @interface DmTuningVC : UITableViewController
 @property (nonatomic, copy) void (^changed)(void);
 @property (nonatomic, strong) NSTimer *timer;
@@ -107,7 +190,13 @@ static BOOL fixed_key(NSString *key) {
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)index {
     [tableView deselectRowAtIndexPath:index animated:YES];
-    if (index.section) { dm_tuning_measure(); [self resume]; }
+    if (index.section) {
+        if (!dm_tuning_active()) return;
+        UIViewController *game = self.navigationController.presentingViewController ?: self.view.window.rootViewController;
+        dm_tuning_measure();
+        [DmBenchmarkHUD showOnView:game.view];
+        [self resume];
+    }
 }
 @end
 void dm_show_tuning(UIViewController *parent, void (^changed)(void)) {

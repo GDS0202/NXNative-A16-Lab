@@ -85,7 +85,7 @@ int main(void) { @autoreleasepool {
     MTL4RenderPipelineDescriptor *m = pre_desc(@"v1", @"f4", 0);
     EXPECT("held: a descriptor for the draw", 1, m != nil);
     dispatch_group_t draw = dispatch_group_create(); __block id drawn = nil;
-    dispatch_group_async(draw, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ @autoreleasepool { NSError *e = nil; drawn = arch_capture(m, &e, 0); } });
+    dispatch_group_async(draw, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ @autoreleasepool { NSError *e = nil; drawn = arch_capture(m, &e, 0, NULL); } });
     EXPECT("held: a draw's compile returns", 0, dispatch_group_wait(draw, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC)));
     EXPECT("held: a draw's compile built", 1, drawn != nil);
     arch_flush();

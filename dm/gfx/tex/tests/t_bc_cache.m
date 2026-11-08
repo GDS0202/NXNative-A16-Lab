@@ -34,6 +34,18 @@ int main(void) { @autoreleasepool {
     nvn_bc_cache_pressure(2); uint64_t before = nvn_bc_cache_stats().writes;
     assert(!nvn_bc_decode(135, src, 2048, 512, 512, out, 2048)); nvn_bc_cache_wait();
     assert(nvn_bc_cache_stats().writes == before); nvn_bc_cache_pressure(0);
+    // A valid entry read recently must be retained before unrelated cold files,
+    // even when its original modification date is older (no per-read utime).
+    NSString *recentlyUsed = nil;
+    for (NSString *file in [NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil]) {
+        if ([file hasSuffix:@".astc"] && ![file isEqualToString:path.lastPathComponent]) {
+            recentlyUsed = [dir stringByAppendingPathComponent:file];
+            break;
+        }
+    }
+    assert(recentlyUsed);
+    assert([NSFileManager.defaultManager setAttributes:@{NSFileModificationDate:[NSDate dateWithTimeIntervalSinceNow:-86400]}
+                                            ofItemAtPath:recentlyUsed error:nil]);
     // Sparse synthetic files exercise the disk budget without writing game data.
     for (unsigned i = 0; i < 18; i++) {
         NSString *fake = [dir stringByAppendingPathComponent:[NSString stringWithFormat:@"budget-%u.astc", i]];
@@ -44,6 +56,7 @@ int main(void) { @autoreleasepool {
     for (NSString *file in [NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil])
         total += [[NSFileManager.defaultManager attributesOfItemAtPath:[dir stringByAppendingPathComponent:file] error:nil][NSFileSize] unsignedLongLongValue];
     assert(total <= (256u << 20));
+    assert([NSFileManager.defaultManager fileExistsAtPath:recentlyUsed]);
     free(src); free(out); free(ref); [NSFileManager.defaultManager removeItemAtPath:dir error:nil];
     puts("BC cache: cold/warm, content keys, corruption, truncation, owned writes, pressure PASS");
 } return 0; }

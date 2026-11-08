@@ -6,7 +6,7 @@
 
 enum { DM_TUNE_SCALE = 1, DM_TUNE_FULL_SCALE = 2, DM_TUNE_CLIP = 4 };
 enum { DM_TUNE_MANUAL, DM_TUNE_SETTLING, DM_TUNE_GPU, DM_TUNE_OTHER,
-       DM_TUNE_FLOOR, DM_TUNE_NO_GPU, DM_TUNE_THERMAL };
+       DM_TUNE_FLOOR, DM_TUNE_NO_GPU, DM_TUNE_THERMAL, DM_TUNE_MEMORY_CAP };
 typedef struct {
     int automatic, target, scale, min_height, texture, far_clip, fixed;
     int auto_texture, auto_clip, clip_floor, output, upscale;
@@ -19,7 +19,7 @@ typedef struct {
     uint64_t headroom, changes;
     double gpu_ms, frame_ms;
     int measuring, measured_frames, measured_complete;
-    double measured_fps, measured_p95;
+    double measured_fps, measured_p95, measured_seconds;
 } dm_tuning_snapshot;
 
 void dm_tuning_init(void *page, unsigned capabilities, int width, int height);

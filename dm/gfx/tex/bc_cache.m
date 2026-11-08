@@ -22,6 +22,35 @@ static NSString *root;
 static dispatch_queue_t writer;
 static _Atomic int busy, pressure;
 static _Atomic uint64_t hits, misses, writes, rejected, saved, decode_calls, decode_ns, cache_ns;
+// Remember recently loaded keys in a fixed-size lock-free ring. No per-hit
+// filesystem writes or unbounded access-time journal on the gameplay path.
+// At pruning time these entries are evicted only after colder disk entries.
+enum { BC_HOT_SLOTS = 256 };
+static _Atomic uint64_t hot_ring[BC_HOT_SLOTS];
+static _Atomic unsigned hot_cursor;
+static uint64_t cache_key_prefix(const char *s) {
+    if (!s) return 0;
+    uint64_t key = 0;
+    for (unsigned i = 0; i < 16; i++) {
+        unsigned c = (unsigned char)s[i], v;
+        if (c >= '0' && c <= '9') v = c - '0';
+        else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
+        else return 0; // Ignores unrelated files and temporary files.
+        key = (key << 4) | v;
+    }
+    return key ? key : 1; // Zero is reserved for an empty slot.
+}
+static void cache_note_access(NSString *path) {
+    uint64_t key = cache_key_prefix(path.lastPathComponent.UTF8String);
+    if (key) atomic_store(&hot_ring[atomic_fetch_add(&hot_cursor, 1u) % BC_HOT_SLOTS], key);
+}
+static int cache_recent(NSString *path) {
+    uint64_t key = cache_key_prefix(path.lastPathComponent.UTF8String);
+    if (!key) return 0;
+    for (unsigned i = 0; i < BC_HOT_SLOTS; i++)
+        if (atomic_load(&hot_ring[i]) == key) return 1;
+    return 0;
+}
 typedef struct { uint8_t magic[8]; uint64_t size; uint8_t digest[32]; char key[64]; } cache_header;
 static const uint8_t magic[8] = {'N','X','B','C','A','S','T','2'};
 
@@ -55,10 +84,17 @@ static void prune(void) {
             [u getResourceValue:&size forKey:NSURLFileSizeKey error:nil]; [u getResourceValue:&date forKey:NSURLContentModificationDateKey error:nil];
             if (pending && date && -date.timeIntervalSinceNow > 3600 && [NSFileManager.defaultManager removeItemAtURL:u error:nil]) continue;
             total += size.unsignedLongLongValue;
-            [entries addObject:@{@"url":u, @"size":size ?: @0, @"date":date ?: NSDate.distantPast}];
+            [entries addObject:@{@"url":u, @"size":size ?: @0, @"date":date ?: NSDate.distantPast,
+                                 @"recent":@(cache_recent(u.path))}];
         }
         if (total <= BC_CACHE_BUDGET) return;
-        [entries sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [a[@"date"] compare:b[@"date"]]; }];
+        [entries sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+            // Protect recently read entries only as long as there are colder
+            // candidates. Fall back to modification date within each class.
+            int ah = [a[@"recent"] boolValue], bh = [b[@"recent"] boolValue];
+            if (ah != bh) return ah ? NSOrderedDescending : NSOrderedAscending;
+            return [a[@"date"] compare:b[@"date"]];
+        }];
         for (NSDictionary *e in entries) {
             if (total <= BC_CACHE_BUDGET) break;
             if ([NSFileManager.defaultManager removeItemAtURL:e[@"url"] error:nil]) total -= [e[@"size"] unsignedLongLongValue];
@@ -95,7 +131,9 @@ static int load(NSString *path, uint8_t *dst, size_t n) {
     close(fd);
     if (ok) { digest(dst, n, hash); ok = !memcmp(hash, hd.digest, 32); }
     if (!ok) { atomic_fetch_add(&rejected, 1); return 0; }
-    atomic_fetch_add(&hits, 1); atomic_fetch_add(&saved, n); return 1;
+    atomic_fetch_add(&hits, 1); atomic_fetch_add(&saved, n);
+    cache_note_access(path);
+    return 1;
 }
 static void store(NSString *path, const uint8_t *dst, size_t n) {
     if (atomic_load(&pressure)) return;

@@ -79,6 +79,29 @@ t_tuning: t_tuning.c ../nvn/nvn_tuning.c ../nvn/nvn_tuning.h
 	clang -O1 -g -Wall -pthread -o $@ t_tuning.c ../nvn/nvn_tuning.c
 t_memory: t_memory.c ../nvn/nvn_memory.h
 	clang $(CFLAGS) -o $@ t_memory.c
+t_pretrim: t_pretrim.c ../nvn/nvn_pretrim.h
+	clang $(CFLAGS) -o $@ t_pretrim.c
+t_pso_retry: t_pso_retry.c ../nvn/nvn_pso_retry.h
+	clang $(CFLAGS) -o $@ t_pso_retry.c
+t_ubd_envelope: t_ubd_envelope.c ../nvn/nvn_ubd_envelope.h
+	clang $(CFLAGS) -o $@ t_ubd_envelope.c
+
+t_ubd_page_index: t_ubd_page_index.c ../nvn/nvn_ubd_page_index.h ../nvn/nvn_ubd_envelope.h
+	clang $(CFLAGS) -o $@ t_ubd_page_index.c
+
+t_pend_candidates: t_pend_candidates.c ../nvn/nvn_pend_candidates.h
+	clang $(CFLAGS) -o $@ t_pend_candidates.c
+
+t_sbw_scoped: t_sbw_scoped.c ../nvn/nvn_sbw_scoped.h
+	clang $(CFLAGS) -o $@ t_sbw_scoped.c
+t_sbw_source_diag: t_sbw_source_diag.c ../nvn/nvn_sbw_source_diag.h
+	clang $(CFLAGS) -o $@ t_sbw_source_diag.c
+t_sbw_range: t_sbw_range.c ../nvn/nvn_sbw_range.h
+	clang $(CFLAGS) -o $@ t_sbw_range.c
+t_sbw_sparse: t_sbw_sparse.c ../nvn/nvn_sbw_sparse.h ../nvn/nvn_sbw_range.h
+	clang $(CFLAGS) -o $@ t_sbw_sparse.c
+t_upload_window: t_upload_window.c ../nvn/nvn_upload_window.h
+	clang $(CFLAGS) -o $@ t_upload_window.c
 t_sampler_quality: t_sampler_quality.c ../nvn/nvn_sampler_quality.h
 	clang $(CFLAGS) -o $@ t_sampler_quality.c
 t_sampler_lod: t_sampler_lod.m $(MTL_T_DEP)
@@ -339,6 +362,9 @@ check_t_unwritten_store: RUN_ENV = MTL_DEBUG_LAYER=1
 t_upgrade_alias: t_upgrade_alias.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_upgrade_alias.m $(MTL_T_SRC) $(FW)
 check_t_upgrade_alias: RUN_ENV = MTL_DEBUG_LAYER=1
+t_alias_takeover: t_alias_takeover.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_alias_takeover.m $(MTL_T_SRC) $(FW)
+check_t_alias_takeover: RUN_ENV = MTL_DEBUG_LAYER=1
 t_image_alias: t_image_alias.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_image_alias.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_image_alias

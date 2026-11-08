@@ -55,6 +55,18 @@ static id<MTLFunction> test_fn(id<MTLLibrary> lib, NSString *name, int registere
     return [compiler newRenderPipelineStateWithDescriptor:d compilerTaskOptions:opts error:error];
 }
 @end
+// The archive serializer (and, separately, plain compiler) can be made to
+// reject the exact same descriptor. This proves a genuinely invalid base
+// keeps its error and does not switch off healthy archive capture.
+@interface ArchiveRejectCompiler : NSObject { @public id<MTL4Compiler> compiler; NSString *domain; } @end
+@implementation ArchiveRejectCompiler
+- (id)forwardingTargetForSelector:(SEL)selector { return compiler; }
+- (id<MTLRenderPipelineState>)newRenderPipelineStateWithDescriptor:(MTL4RenderPipelineDescriptor *)d compilerTaskOptions:(MTL4CompilerTaskOptions *)opts error:(NSError **)error {
+    (void)d; (void)opts;
+    if (error) *error = [NSError errorWithDomain:domain code:123 userInfo:nil];
+    return nil;
+}
+@end
 // Notes whether the compaction marker exists while the serializer writes (issue #342: a flush that does not return leaves it)
 @interface MarkerSerializer : NSObject { @public id<MTL4PipelineDataSetSerializer> ser; int calls, marked; } @end
 @implementation MarkerSerializer
@@ -161,6 +173,10 @@ static void depth_only(void) {
 }
 static void concurrent_bases(int fail) {
     nvn_hm_clear(&g_pbase, hm_rel);
+    // These are independent fixture cases; the previous archive-failure case
+    // must not make the next one silently bypass its injected compiler.
+    atomic_store(&g_arch_capture_bypass, 0);
+    uint64_t fallback_before = atomic_load(&g_arch_capture_fallbacks);
     ArchEpoch *ep = g_ep; ArchiveGateCompiler *gate = [ArchiveGateCompiler new]; gate->compiler = ep->comp; gate->fail = fail;
     gate->entered = dispatch_semaphore_create(0); gate->release = dispatch_semaphore_create(0); ep->comp = (id<MTL4Compiler>)gate;
     NSMutableArray<MTLRenderPipelineDescriptor *> *ds = [NSMutableArray array];
@@ -171,7 +187,7 @@ static void concurrent_bases(int fail) {
     dispatch_group_t group = dispatch_group_create(); __block int good = 0; NSObject *lock = [NSObject new];
     for (MTLRenderPipelineDescriptor *d in ds) dispatch_group_async(group, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         @autoreleasepool { NSError *err = nil; id ps = pso_build(d, &err);
-            @synchronized(lock) { good += fail ? !ps && [err.domain isEqualToString:@"test"] : ps != nil; }
+            @synchronized(lock) { good += ps != nil; }
         }
     });
     EXPECT("concurrent: first compiler entered", 0, dispatch_semaphore_wait(gate->entered, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)));
@@ -186,7 +202,47 @@ static void concurrent_bases(int fail) {
     if (!fail) EXPECT("concurrent: one compile per base", 2, gate->calls);
     EXPECT("concurrent: no unfinished builds", 0, g_pbase_pending.n);
     ep->comp = gate->compiler;
-    if (fail) { NSError *err = nil; EXPECT("concurrent: failed base can retry", 1, pso_build(ds[0], &err) != nil); }
+    if (fail) {
+        EXPECT("archive failure: plain compiler recovers", 1,
+               atomic_load(&g_arch_capture_fallbacks) > fallback_before);
+        EXPECT("archive failure: capture bypassed for rest of run", 1,
+               atomic_load(&g_arch_capture_bypass));
+        // With a failed archive capture, future compaction must NOT remove
+        // old archive files: not all bases have been recaptured.
+        NSArray<NSString *> *saved = g_compact_files;
+        g_compact_files = @[@"/does/not/exist"];
+        atomic_store(&g_compacted, 1);
+        g_arch_flush_ok = 1;
+        arch_compact_finish();
+        EXPECT("failed capture: old cache files retained", 1, g_compact_files != nil);
+        g_compact_files = saved;
+        atomic_store(&g_compacted, 0);
+        // Return to a real compiler before the next fixture.
+        atomic_store(&g_arch_capture_bypass, 0);
+    }
+}
+static void capture_both_compilers_reject(void) {
+    ArchEpoch *ep = g_ep;
+    id<MTL4Compiler> real_ep = ep->comp, real_plain = g_comp4;
+    ArchiveRejectCompiler *archive = [ArchiveRejectCompiler new];
+    ArchiveRejectCompiler *plain = [ArchiveRejectCompiler new];
+    archive->compiler = real_ep; archive->domain = @"archive-test-error";
+    plain->compiler = real_plain; plain->domain = @"plain-test-error";
+    ep->comp = (id<MTL4Compiler>)archive;
+    g_comp4 = (id<MTL4Compiler>)plain;
+    atomic_store(&g_arch_capture_bypass, 0);
+    uint64_t before = atomic_load(&g_arch_capture_fallbacks);
+    MTLRenderPipelineDescriptor *d = desc(MTLPixelFormatRGBA8Unorm, 0,
+                                          MTLPixelFormatRGBA8Unorm, MTLColorWriteMaskAll, 1);
+    NSError *error = nil;
+    int captured = 1;
+    id ps = arch_capture(pso_desc4(d, 1), &error, 1, &captured);
+    EXPECT("both compilers reject: no pipeline", 0, ps != nil);
+    EXPECT("both compilers reject: plain error preserved", 1, [error.domain isEqualToString:@"plain-test-error"]);
+    EXPECT("both compilers reject: not captured", 0, captured);
+    EXPECT("both compilers reject: do not bypass the archive", 0, atomic_load(&g_arch_capture_bypass));
+    EXPECT("both compilers reject: no successful fallback counted", before, atomic_load(&g_arch_capture_fallbacks));
+    ep->comp = real_ep; g_comp4 = real_plain;
 }
 static void capture_preserves_foreign_folder(void) {
     arch_flush_wait();   // Finish earlier captures: the captures below go into a new flush period
@@ -382,6 +438,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     depth_only();
     concurrent_bases(0);
     concurrent_bases(1);
+    capture_both_compilers_reject();
     // key normalization
     pso_key k; memset(&k, 0, sizeof k); k.blend_en = 0x5; k.dfmt = MTLPixelFormatDepth32Float; k.sfmt = MTLPixelFormatStencil8;
     for (int i = 0; i < 8; i++) { k.cfmt[i] = MTLPixelFormatRGBA8Unorm; k.blend[i].src_rgb = 5; k.blend[i].dst_rgb = 6; }   // every target present: only the blend rule acts

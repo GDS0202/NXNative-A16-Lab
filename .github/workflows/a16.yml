@@ -33,6 +33,26 @@ jobs:
         run: |
           clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_memory.c -o /tmp/memory
           /tmp/memory
+          clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_pretrim.c -o /tmp/pretrim
+          /tmp/pretrim
+          clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_ubd_envelope.c -o /tmp/ubd-envelope
+          /tmp/ubd-envelope
+          clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_ubd_page_index.c -o /tmp/ubd-page-index
+          /tmp/ubd-page-index
+          clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_pend_candidates.c -o /tmp/pend-candidates
+          /tmp/pend-candidates
+          clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_sbw_source_diag.c -o /tmp/sbw-source-diag
+          /tmp/sbw-source-diag
+          clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_sbw_scoped.c -o /tmp/sbw-scoped
+          /tmp/sbw-scoped
+          clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_sbw_sparse.c -o /tmp/sbw-sparse
+          /tmp/sbw-sparse
+          clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_pso_retry.c -o /tmp/pso-retry
+          /tmp/pso-retry
+          clang -O2 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_sbw_range.c -o /tmp/sbw-range
+          /tmp/sbw-range
+          clang -O2 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_upload_window.c -o /tmp/upload-window
+          /tmp/upload-window
           clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_sampler_quality.c -lm -o /tmp/sampler-quality
           /tmp/sampler-quality
           clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_archive_route.c -o /tmp/archive-route

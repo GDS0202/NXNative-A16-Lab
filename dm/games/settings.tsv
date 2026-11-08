@@ -40,6 +40,9 @@ DM_PSO_MTL4	toggle	-	DM_GAME_PSO_MTL4|1	gfxapi:nvn	Performance	Metal 4 pipelines
 DM_PSO_ARCH_ASYNC	toggle	-	1	gfxapi:nvn	Performance	Load fragmented archives in background	Uses a matching prepared pulling pipeline while its native layout loads. Falls back to the full search when unavailable; may briefly increase vertex work.	needs=DM_PSO_MTL4=1
 DM_PSO_PREBUILD	toggle	-	0|1	gfxapi:nvn	Performance	Pipeline prebuild	Builds every shader pair; can use hundreds of MB. Keep off on A16 unless memory measurements allow it.
 DM_NVN_ENC_THREAD	toggle	-	1|0	gfxapi:nvn	Performance	Encode thread
+DM_NVN_SBW_SCOPED	toggle	-	build:DM_NVN_SBW_SCOPED	gfxapi:nvn	Performance	Experimental scoped GPU writes	Conservatively bounds unknown storage writes to a whole backing Metal allocation; can reduce GPU barriers. Compare in the same scene and disable if textures or drawing change.
+DM_NVN_CPU_READ_NORES	toggle	-	1	gfxapi:nvn	Performance	CPU-only reads without GPU residency	Avoids marking otherwise-unused memory pools GPU-resident for CPU-only reads; disable for compatibility A/B.
+DM_NVN_RT_VIEW_UPGRADE	toggle	-	0	gfxapi:nvn	Performance	Experimental render target format views	Recreate only an eligible uncompressed render target when an alternate pixel-format view requires it; may increase memory or reduce lossless compression.
 DM_FPS_HOLD	toggle	on/off	DM_GAME_FPS_HOLD	DM_GAME_FPS_TARGET!=0	Performance	Hold frames when late
 DM_METAL_HUD	toggle	-	0	always	Performance	Performance HUD
 DM_STUTTER	toggle	-	0	gfxapi:nvn	Performance	Record performance trace	Writes bounded stutter.jsonl and capabilities.json in Documents. Restart after changing; measure recording overhead in A/B tests.

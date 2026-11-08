@@ -1433,6 +1433,50 @@ static void power_line(uint64_t frame) {
         void mtl_ubp_stats(uint64_t *, uint64_t *, uint64_t *); static uint64_t ppm, ppr, ppf; uint64_t pm, pr, pf_; mtl_ubp_stats(&pm, &pr, &pf_);
         void mtl_lc_stats(uint64_t *, uint64_t *); static uint64_t plt, pll; uint64_t lt, ll; mtl_lc_stats(&lt, &ll);
         void mtl_ubp_why(uint64_t w[5]); static uint64_t pw5[5]; uint64_t w5[5]; mtl_ubp_why(w5);
+        void mtl_sbw_diagnostics(uint64_t out[6]); static uint64_t psbw[6]; uint64_t sbw[6]; mtl_sbw_diagnostics(sbw);
+        if (memcmp(sbw, psbw, sizeof sbw))
+            LOG("[nvn] uniform GPU-write analysis up to frame %llu: unknown/invalid writes %llu, known writes over 16 MiB %llu, page-table capacity failures %llu; shadows refused by conservative global overflow %llu, confirmed 16-byte tile conflicts %llu, same-page but disjoint ranges spared %llu (diagnostic counts, not exact saved render passes)",
+                frame, (unsigned long long)(sbw[0]-psbw[0]), (unsigned long long)(sbw[1]-psbw[1]),
+                (unsigned long long)(sbw[2]-psbw[2]), (unsigned long long)(sbw[3]-psbw[3]),
+                (unsigned long long)(sbw[5]-psbw[5]), (unsigned long long)(sbw[4]-psbw[4]));
+        memcpy(psbw, sbw, sizeof sbw);
+        // An optional source breakdown of the *same* GPU-write observations.
+        // One note is a shader binding or copy, not a guaranteed memory write
+        // or a separate render-pass cut. No addresses or shader names logged.
+        void mtl_sbw_source_diagnostics(uint64_t out[12]);
+        static uint64_t psrc[12]; uint64_t src[12]; mtl_sbw_source_diagnostics(src);
+        if (memcmp(src, psrc, sizeof src))
+            LOG("[nvn] uniform GPU-write origins up to frame %llu: storage notes %llu (unknown %llu, large %llu, capacity %llu); bindless notes %llu (unknown %llu, large %llu, capacity %llu); texture-copy notes %llu (unknown %llu, large %llu, capacity %llu) (DM_NVN_SBW_TRACE, counts per binding/copy, not distinct writes)",
+                frame,
+                (unsigned long long)(src[0]-psrc[0]), (unsigned long long)(src[1]-psrc[1]),
+                (unsigned long long)(src[2]-psrc[2]), (unsigned long long)(src[3]-psrc[3]),
+                (unsigned long long)(src[4]-psrc[4]), (unsigned long long)(src[5]-psrc[5]),
+                (unsigned long long)(src[6]-psrc[6]), (unsigned long long)(src[7]-psrc[7]),
+                (unsigned long long)(src[8]-psrc[8]), (unsigned long long)(src[9]-psrc[9]),
+                (unsigned long long)(src[10]-psrc[10]), (unsigned long long)(src[11]-psrc[11]));
+        memcpy(psrc, src, sizeof src);
+        // Optional zero-sized writable storage diagnostic. Per-slot totals,
+        // sorted by the largest change in this window; no shader names,
+        // guest addresses, payload bytes or unbounded per-draw logs.
+        void mtl_sbw_scoped_diagnostics(uint64_t out[5], uint64_t slots[96]);
+        static uint64_t psc[5], psz[96];
+        uint64_t sc[5], sz[96]; mtl_sbw_scoped_diagnostics(sc, sz);
+        uint64_t first = 0, second = 0; int first_slot = -1, second_slot = -1;
+        for (int i = 0; i < 96; i++) {
+            uint64_t delta = sz[i] - psz[i];
+            if (delta > first) { second = first; second_slot = first_slot; first = delta; first_slot = i; }
+            else if (delta > second) { second = delta; second_slot = i; }
+        }
+        if (memcmp(sc, psc, sizeof sc) || first)
+            LOG("[nvn] scoped storage GPU writes up to frame %llu: bounded %llu, fallback global %llu, in-submit conflicts %llu, prior-submit conflicts %llu, table overflow %llu; zero-size RW top stage/reg %d/%d=%llu, %d/%d=%llu (TRACE required for stage/reg counts; counts are checks, not distinct writes)",
+                frame,
+                (unsigned long long)(sc[0] - psc[0]), (unsigned long long)(sc[1] - psc[1]),
+                (unsigned long long)(sc[2] - psc[2]), (unsigned long long)(sc[3] - psc[3]),
+                (unsigned long long)(sc[4] - psc[4]),
+                first_slot < 0 ? -1 : first_slot / 16, first_slot < 0 ? -1 : first_slot % 16, (unsigned long long)first,
+                second_slot < 0 ? -1 : second_slot / 16, second_slot < 0 ? -1 : second_slot % 16, (unsigned long long)second);
+        memcpy(psc, sc, sizeof sc); memcpy(psz, sz, sizeof sz);
+
         uint64_t ld, st, fu, udc = mtl_udc_saved_bytes(); mtl_bw(&ld, &st, &fu);
         void mtl_sm_stats(uint64_t *, uint64_t *, uint64_t *); static uint64_t psmp, psmc, psmw; uint64_t smp, smc, smw; mtl_sm_stats(&smp, &smc, &smw);
         void mtl_cshoist_stats(uint64_t *, uint64_t *, uint64_t *); static uint64_t pchm, pchd, pchs[8]; uint64_t chm, chd, chs[8]; mtl_cshoist_stats(&chm, &chd, chs);

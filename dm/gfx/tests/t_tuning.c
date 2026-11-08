@@ -72,6 +72,27 @@ int main(void) {
     dm_tuning_system(1100000000, 0, 0); frames(1800, 8, 16.666667, 0); assert(dm_tuning_read().scale == 100);
     dm_tuning_boundary(); now += 20000000000ull; frames(1, 24, 25, 0); assert(dm_tuning_read().scale == 100);
 
+    // A protection-induced 30 FPS must not trigger unnecessary quality loss.
+    init(); assert(dm_tuning_set("DM_AUTO_QUALITY", 1)); assert(dm_tuning_set("DM_AUTO_TEXTURE", 1));
+    assert(dm_tuning_set("DM_AUTO_VIEW", 1));
+    dm_tuning_system(818ull << 20, 0, 0); dm_tuning_limits(30, 8, 2, 2);
+    frames(1500, 25, 34, 0);
+    assert(dm_tuning_read().scale == 100 && dm_tuning_read().texture == 0 &&
+           dm_tuning_read().far_clip == 0 && dm_tuning_read().status == DM_TUNE_MEMORY_CAP);
+    dm_tuning_limits(60, 0, 0, 0); dm_tuning_system(1100000000, 0, 0);
+    frames(1200, 24, 25, 0); assert(dm_tuning_read().scale < 100);
+
+    // A memory cap of 30 must not freeze quality if the GPU needs >33 ms/frame
+    // and the result still misses the *reachable* 30 FPS budget.
+    init(); assert(dm_tuning_set("DM_AUTO_QUALITY", 1));
+    dm_tuning_system(818ull << 20, 0, 0); dm_tuning_limits(30, 8, 2, 2);
+    frames(1000, 54, 59, 0);
+    assert(dm_tuning_read().scale == 80);
+    frames(1200, 24, 34, 0);
+    assert(dm_tuning_read().scale == 80 && dm_tuning_read().status == DM_TUNE_MEMORY_CAP);
+    dm_tuning_limits(60, 0, 0, 0); dm_tuning_system(1100000000, 0, 0);
+    frames(1800, 8, 16.666667, 0); assert(dm_tuning_read().scale == 100);
+
     init(); assert(dm_tuning_set("DM_AUTO_QUALITY", 1)); assert(dm_tuning_set("DM_AUTO_TEXTURE", 1));
     assert(dm_tuning_set("DM_AUTO_VIEW", 1)); frames(2500, 24, 25, 0);
     assert(dm_tuning_read().texture == 2 && dm_tuning_read().far_clip == 2000);
@@ -83,15 +104,25 @@ int main(void) {
     dm_tuning_snapshot s = dm_tuning_read();
     assert(!s.measuring && s.measured_complete && s.measured_frames == 1800);
     assert(fabs(s.measured_fps - 60) < .001 && fabs(s.measured_p95 - 16.666667) < .001);
+    assert(fabs(s.measured_seconds - 30) < .02);
     dm_tuning_measure(); dm_tuning_present(stamp); dm_tuning_boundary(); assert(!dm_tuning_read().measuring && !dm_tuning_read().measured_complete);
     dm_tuning_measure(); dm_tuning_present(stamp); assert(dm_tuning_set("DM_TEXTURE_DETAIL", 1));
-    assert(!dm_tuning_read().measuring && !dm_tuning_read().measured_complete && !dm_tuning_read().measured_frames);
+    assert(!dm_tuning_read().measuring && !dm_tuning_read().measured_complete && !dm_tuning_read().measured_frames && !dm_tuning_read().measured_seconds);
 
+    // A real-world benchmark with automatic quality ON must finish even when
+    // the controller lowers or raises quality during the 30-second window.
     init(); assert(dm_tuning_set("DM_AUTO_QUALITY", 1));
-    dm_tuning_measure(); dm_tuning_present(now); frames(1200, 24, 25, 0);
-    assert(dm_tuning_read().scale == 80 && !dm_tuning_read().measuring && !dm_tuning_read().measured_complete);
-    dm_tuning_measure(); dm_tuning_present(now); frames(1800, 8, 16.666667, 0);
-    assert(dm_tuning_read().scale == 100 && !dm_tuning_read().measuring && !dm_tuning_read().measured_complete);
+    dm_tuning_measure();
+    uint64_t start_changes = dm_tuning_read().changes;
+    for (int i = 0; i < 1802; i++) {
+        now += 16666667ull;
+        dm_tuning_tick(now, i < 900 ? 24 : 8, 16.666667, 0, 0);
+        dm_tuning_present(now);
+    }
+    s = dm_tuning_read();
+    assert(!s.measuring && s.measured_complete && s.measured_frames == 1800);
+    assert(s.measured_seconds >= 30 && s.measured_seconds < 30.02);
+    assert(s.changes > start_changes);
 
     init(); dm_tuning_init(NULL, 0, 0, 0); assert(!dm_tuning_set("DM_AUTO_QUALITY", 1));
     assert(!dm_tuning_set("DM_VIEW_DISTANCE", 1000));

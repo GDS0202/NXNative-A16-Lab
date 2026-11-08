@@ -23,7 +23,7 @@ static double measure_intervals[4096];
 static unsigned measure_count;
 static void cancel_measurement(void) {
     state.measuring = state.measured_complete = state.measured_frames = 0;
-    state.measured_fps = state.measured_p95 = 0;
+    state.measured_fps = state.measured_p95 = state.measured_seconds = 0;
     measure_first = measure_last = measure_count = 0;
     atomic_store(&measure_active, 0);
 }
@@ -146,6 +146,20 @@ void dm_tuning_tick(uint64_t now, double gpu, double frame, double compilation, 
         samples = good_windows = bad_windows = 0; window_start = last_change = now; changed = 0; apply();
     }
     state.gpu_ms = gpu; state.frame_ms = frame;
+    // A memory-protection cap below the requested FPS is not a reason to
+    // sacrifice quality when the GPU already fits the allowed frame budget.
+    // But a 40-60 ms GPU frame still misses even a 30 FPS protective cap:
+    // keep reducing GPU workload to the *attainable* capped budget, not to
+    // the temporarily impossible 60 FPS target.
+    int memory_limited = state.requested.automatic && state.effective_cap > 0 &&
+        state.effective_cap < state.requested.target && (state.cap_reasons & 8);
+    double allowed_gpu_ms = memory_limited ? 1000.0 / state.effective_cap : 0;
+    if (memory_limited && (!isfinite(gpu) || gpu <= allowed_gpu_ms * .98)) {
+        samples = good_windows = bad_windows = 0;
+        window_start = last = now;
+        state.status = DM_TUNE_MEMORY_CAP;
+        goto done;
+    }
     if (!state.requested.automatic) { state.status = DM_TUNE_MANUAL; last = now; goto done; }
     if (!last || now <= last || now - last > 250000000ull || movie || frame > 250 || compilation > 2) {
         samples = good_windows = bad_windows = 0; window_start = now; state.status = DM_TUNE_SETTLING; last = now; goto done;
@@ -161,7 +175,7 @@ void dm_tuning_tick(uint64_t now, double gpu, double frame, double compilation, 
     if (samples < 120 && (now - window_start < 1000000000ull || samples < 20)) goto done;
     double g = percentile(gpu_samples, samples, .90), f = percentile(frame_samples, samples, .50);
     samples = 0; window_start = now;
-    double budget = 1000.0 / state.requested.target;
+    double budget = memory_limited ? allowed_gpu_ms : 1000.0 / state.requested.target;
     int overloaded = g > budget * .98, spare = g < budget * .75 && f <= budget * 1.12;
     bad_windows = overloaded ? bad_windows + 1 : 0;
     good_windows = spare ? good_windows + 1 : 0;
@@ -178,7 +192,8 @@ void dm_tuning_tick(uint64_t now, double gpu, double frame, double compilation, 
             state.far_clip = clip > 10000 ? 10000 : clip - 1000;
             if (state.far_clip < limit) state.far_clip = limit;
         } else { state.status = DM_TUNE_FLOOR; goto done; }
-        if (state.measuring) cancel_measurement();
+        // A live benchmark includes the controller's automatic quality changes;
+        // only user setting changes and true scene/lifecycle boundaries cancel it.
         last_change = now; good_windows = bad_windows = 0; state.changes++; apply();
     } else if (good_windows >= 5 && now - last_change >= 5000000000ull) {
         // Restore visibility and texture quality before increasing scene resolution.
@@ -191,7 +206,8 @@ void dm_tuning_tick(uint64_t now, double gpu, double frame, double compilation, 
         else if (state.texture > state.requested.texture) state.texture--;
         else if (state.scale < ((state.capabilities & DM_TUNE_FULL_SCALE) ? 100 : 95)) state.scale += 5;
         else goto done;
-        if (state.measuring) cancel_measurement();
+        // A live benchmark includes the controller's automatic quality changes;
+        // only user setting changes and true scene/lifecycle boundaries cancel it.
         last_change = now; good_windows = bad_windows = 0; state.changes++; apply();
     }
 done:
@@ -199,7 +215,7 @@ done:
 }
 void dm_tuning_measure(void) {
     pthread_mutex_lock(&lock); measure_first = measure_last = measure_count = 0;
-    state.measuring = 1; state.measured_complete = 0; state.measured_frames = 0; state.measured_fps = state.measured_p95 = 0;
+    state.measuring = 1; state.measured_complete = 0; state.measured_frames = 0; state.measured_fps = state.measured_p95 = state.measured_seconds = 0;
     atomic_store(&measure_active, 1);
     pthread_mutex_unlock(&lock);
 }
@@ -212,7 +228,8 @@ void dm_tuning_present(uint64_t timestamp) {
             double ms = (timestamp - measure_last) / 1e6;
             if (measure_count < 4096) measure_intervals[measure_count++] = ms;
             state.measured_frames++;
-            state.measured_fps = state.measured_frames * 1e9 / (double)(timestamp - measure_first);
+            state.measured_seconds = (timestamp - measure_first) / 1e9;
+            state.measured_fps = state.measured_frames / state.measured_seconds;
             if (timestamp - measure_first >= 30000000000ull) {
                 state.measuring = 0; state.measured_complete = 1; state.measured_p95 = percentile(measure_intervals, measure_count, .95);
                 atomic_store(&measure_active, 0);
@@ -225,11 +242,12 @@ void dm_tuning_present(uint64_t timestamp) {
 dm_tuning_snapshot dm_tuning_read(void) { pthread_mutex_lock(&lock); dm_tuning_snapshot s = state; pthread_mutex_unlock(&lock); return s; }
 void dm_tuning_describe(char *text, size_t capacity) {
     dm_tuning_snapshot s = dm_tuning_read();
-    const char *names[] = {"Manual", "Settling/loading", "GPU feedback", "CPU/streaming or other limit", "Quality floor reached", "Waiting for GPU samples", "Quality recovery paused"};
+    const char *names[] = {"Manual", "Settling/loading", "GPU feedback", "CPU/streaming or other limit", "Quality floor reached", "Waiting for GPU samples", "Quality recovery paused", "Memory cap: quality held"};
     const char *limit = s.cap_reasons & 8 ? "Memory/recovery" : s.cap_reasons & 4 ? "Thermal/recovery" : s.cap_reasons & 2 ? "Movie" : s.cap_reasons & 1 ? "Selected target" : "Target active";
     const char *pressure = s.memory_pressure == 2 ? "critical" : s.memory_pressure == 1 ? "warning" : "normal";
-    snprintf(text, capacity, "%s · %d%% (%d×%d nominal) · GPU %.1f ms\nFilter %d · visibility %d · %.2f GiB headroom\nTarget %d · cap %d · %s · OS pressure %s\n%s: %d real frames · %.1f fps · p95 %.1f ms",
+    snprintf(text, capacity, "%s · %d%% (%d×%d nominal) · GPU %.1f ms\nFilter %d · visibility %d · %.2f GiB headroom\nTarget %d · cap %d · %s · OS pressure %s\n%s: %.1f/30 s · %d real frames · %.1f fps · p95 %.1f ms",
         names[s.status], s.scale, s.width * s.scale / 100, s.height * s.scale / 100, s.gpu_ms,
         s.texture, s.far_clip, s.headroom / 1073741824.0, s.requested.target, s.effective_cap, limit, pressure,
-        s.measuring ? "Measuring 30 s" : s.measured_complete ? "Last complete measurement" : "No complete measurement", s.measured_frames, s.measured_fps, s.measured_p95);
+        s.measuring ? "Measuring" : s.measured_complete ? "Completed" : "Not measuring",
+        s.measured_seconds, s.measured_frames, s.measured_fps, s.measured_p95);
 }
