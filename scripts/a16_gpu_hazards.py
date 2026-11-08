@@ -30,15 +30,25 @@ SBW = re.compile(
 SBW_FIELDS = ('unknown_writes', 'large_writes', 'capacity_failures',
               'global_overflow_denials', 'confirmed_tile_conflicts',
               'disjoint_same_page_spared')
+# New optional counters are observational: they do NOT change the old log
+# parser, GPU timings, or per-window safety statistics.
+ORIGINS = re.compile(
+    r'\[nvn\] uniform GPU-write origins up to frame (\d+): '
+    r'storage notes (\d+) \(unknown (\d+), large (\d+), capacity (\d+)\); '
+    r'bindless notes (\d+) \(unknown (\d+), large (\d+), capacity (\d+)\); '
+    r'texture-copy notes (\d+) \(unknown (\d+), large (\d+), capacity (\d+)\)')
+ORIGIN_NAMES = ('storage', 'bindless', 'texture_copy')
+ORIGIN_FIELDS = ('notes', 'unknown', 'large', 'capacity')
 
 
 def parse(lines):
     """Join by frame index only. Duplicate frames in a concatenated session
     are rejected rather than silently joined across runs."""
     rows = {}
-    seen = {'timing': set(), 'residency': set(), 'sbw': set()}
+    seen = {'timing': set(), 'residency': set(), 'sbw': set(), 'origins': set()}
     for line in lines:
-        for typ, regex in (('timing', TIMING), ('residency', RESIDENCY), ('sbw', SBW)):
+        for typ, regex in (('timing', TIMING), ('residency', RESIDENCY),
+                           ('sbw', SBW), ('origins', ORIGINS)):
             match = regex.search(line)
             if not match:
                 continue
@@ -56,8 +66,14 @@ def parse(lines):
                           'prior_submission_refusals', 'copy_fill_refusals',
                           'size_refusals', 'unreadable_refusals')
                 row.update(zip(fields, map(int, values)))
-            else:
+            elif typ == 'sbw':
                 row['gpu_write_diagnostics'] = dict(zip(SBW_FIELDS, map(int, values)))
+            else:
+                counts = list(map(int, values))
+                row['gpu_write_origins'] = {
+                    origin: dict(zip(ORIGIN_FIELDS, counts[4 * i:4 * (i + 1)]))
+                    for i, origin in enumerate(ORIGIN_NAMES)
+                }
             break
     complete = [rows[f] for f in sorted(rows)
                 if 'gpu_p50_ms' in rows[f] and 'shadow_refusals' in rows[f]]
@@ -72,6 +88,7 @@ def summarize(rows, top=8):
     total = lambda k: sum(row[k] for row in rows)
     bad = [row for row in rows if row['gpu_p50_ms'] > 1000 / 30]
     with_sb = [row for row in rows if 'gpu_write_diagnostics' in row]
+    with_origins = [row for row in rows if 'gpu_write_origins' in row]
     samples = total('shadows_cached') + total('shadow_refusals')
     result = {
         'window_count': len(rows),
@@ -82,6 +99,7 @@ def summarize(rows, top=8):
         'shadow_refusal_fraction_of_cached_plus_refused': (
             round(total('shadow_refusals') / samples, 6) if samples else None),
         'detailed_gpu_write_windows': len(with_sb),
+        'source_diagnostic_windows': len(with_origins),
         'most_shadow_refusals': sorted(rows, key=lambda r: (-r['shadow_refusals'], r['frame']))[:top],
         'highest_gpu_p95_ms': sorted(rows, key=lambda r: (-r['gpu_p95_ms'], r['frame']))[:top],
     }
@@ -89,6 +107,15 @@ def summarize(rows, top=8):
         result['sum_gpu_write_diagnostics'] = {
             k: sum(row['gpu_write_diagnostics'][k] for row in with_sb)
             for k in SBW_FIELDS
+        }
+    if with_origins:
+        result['sum_gpu_write_origins'] = {
+            origin: {
+                field: sum(row['gpu_write_origins'][origin][field]
+                           for row in with_origins)
+                for field in ORIGIN_FIELDS
+            }
+            for origin in ORIGIN_NAMES
         }
     return result
 
@@ -102,7 +129,10 @@ def inspect(path, top=8):
             'interpretation': (
                 'Per-window diagnostic counts. Correlation is not causation. '
                 'Confirmed tile conflicts are not necessarily distinct render-pass cuts. '
-                'Compare only matching gameplay scenes, settings, and cache state.')}
+                'Source notes count bindings/copies, not unique GPU writes. '
+                'The opt-in DM_NVN_SBW_TRACE may add CPU overhead; avoid comparing its FPS '
+                'with uninstrumented runs. Compare only matching gameplay scenes, '
+                'settings, and cache state.')}
 
 
 def main():
