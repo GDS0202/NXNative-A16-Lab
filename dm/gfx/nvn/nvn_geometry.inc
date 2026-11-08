@@ -635,7 +635,7 @@ static int geo_prep(NvProg *pr, const p_draw *dw0, const p_draw_idx *di0, geo_jo
     for (int i = 0; i < gs->rf.nb; i++) {
         const nvn_rbind *b = &gs->rf.b[i];
         if (b->kind == NVN_RB_SBUFP && b->rw && b->reg < 16 && S.ssbo[2][b->reg].addr)
-            sbw_note(S.ssbo[2][b->reg].addr, S.ssbo[2][b->reg].size, SBW_GPU);
+            sbw_note(S.ssbo[2][b->reg].addr, S.ssbo[2][b->reg].size, SBW_GPU, NVN_SBW_FROM_STORAGE);
     }
     if (may_wait) vbuf_prepare();
     return 1;
@@ -690,7 +690,7 @@ static int geo_run_passes(uint32_t op, const void *a) {
     if (op == OP_REPORT_COUNTER) {
         uint64_t t, ad; memcpy(&t, a, 8); memcpy(&ad, (const uint8_t *)a + 8, 8);
         if (t == NVN_COUNTER_TYPE_SAMPLES_PASSED && !geo_query_run()) return 0;
-        sbw_note(ad, 16, SBW_REPORT); return 1;
+        sbw_note(ad, 16, SBW_REPORT, NVN_SBW_FROM_NONE); return 1;
     }
     if (op == OP_RESET_COUNTER) { uint64_t t; memcpy(&t, a, 8); return t != NVN_COUNTER_TYPE_SAMPLES_PASSED || geo_query_run(); }
     if (op == OP_SIGNAL_EVENT) return 1;
