@@ -77,8 +77,51 @@ static int test_output_lifetime(void) {
     printf("AudioOut fields and lifetime (%s): %d guarded open / close / unmap / resume cycles, no consumer left\n", real_audio() ? "real output" : "silent sink", CYCLES);
     return 0;
 }
+// Multiple complete buffers can be returned by one AudioUnit callback.
+// The release notification is a wake-up hint, not a per-buffer counter:
+// pull() deliberately coalesces a callback's releases before signaling.
+static int test_coalesced_release_notification(void) {
+    int16_t pcm[2][2] = {{1, 2}, {3, 4}}, output[4] = {0};
+    gbuf blocks[2] = {
+        {pcm[0], sizeof pcm[0], sizeof pcm[0]},
+        {pcm[1], sizeof pcm[1], sizeof pcm[1]},
+    };
+    aout a = {0};
+    a.ch = 2; a.event = &a;
+    a.q[0] = blocks; a.q[1] = blocks + 1;
+    atomic_init(&a.state, STATE_STARTED);
+    atomic_init(&a.vol, 0x3f800000u);
+    atomic_init(&a.q_tail, 2);
+    atomic_init(&a.notify_run, 1);
+    atomic_init(&a.notify_pending, 0);
+    atomic_init(&a.notify_armed, 0);
+    a.notify_sem = dispatch_semaphore_create(0);
+    if (!a.notify_sem) return 1;
+    atomic_store_explicit(&g_sig, 0, memory_order_release);
+    if (pthread_create(&a.notify_th, NULL, event_notify, &a)) {
+        dispatch_release(a.notify_sem);
+        return 1;
+    }
+    // One callback returns two buffers. It must generate one notification
+    // that wakes a consumer able to drain the entire released queue.
+    pull(&a, (uint8_t *)output, sizeof output);
+    atomic_store_explicit(&a.notify_run, 0, memory_order_release);
+    dispatch_semaphore_signal(a.notify_sem);
+    pthread_join(a.notify_th, NULL);
+    dispatch_release(a.notify_sem);
+    int notifications = atomic_load_explicit(&g_sig, memory_order_acquire);
+    int ok = atomic_load_explicit(&a.rel_tail, memory_order_acquire) == 2 &&
+             a.rel[0] == blocks && a.rel[1] == blocks + 1 &&
+             output[0] == 1 && output[1] == 2 &&
+             output[2] == 3 && output[3] == 4 &&
+             notifications == 1;
+    printf("coalesced release: two ordered buffers, one event notification %s\n",
+           ok ? "PASS" : "FAIL");
+    return !ok;
+}
 int main(void) {
-    if (test_surround_output() || test_output_lifetime()) return 1;
+    if (test_surround_output() || test_coalesced_release_notification() ||
+        test_output_lifetime()) return 1;
     char out[64], ev[64]; uint8_t prm[16]; gbuf b[3]; static int16_t pcm[3][4800 * 2];
     h_au_InitParam(prm);
     if (h_au_Open(out, ev, NULL, prm)) return 1;
@@ -96,11 +139,13 @@ int main(void) {
     }
     h_au_Close(out);
     int sig1 = atomic_load_explicit(&g_sig, memory_order_acquire);
-    printf("released %d/3, event signaled %d times (expected 3)\n", got, sig1);
-    if (fail || got != 3 || sig1 != 3) return 1;
+    // The system event is a notification to drain the release queue. Callback
+    // batching and the notify thread may coalesce several releases into one.
+    printf("released %d/3, event signaled %d times (expected 1..3)\n", got, sig1);
+    if (fail || got != 3 || sig1 < 1 || sig1 > got) return 1;
 
     // Scenario 2: the real audio output sink (PCM all 0, inaudible) plays 6 blocks of 100 ms each, pausing at 150 ms (app to background / incoming call) and resuming at 350 ms.
-    // Expected: during the pause the silent sink takes over and consumes in real time, all 6 blocks are released in order with 6 events; total duration ~ 600 ms (real time, neither stalled by the pause nor sped up).
+    // Expected: during the pause the silent sink takes over and consumes in real time, all 6 blocks are released in order with at least one wake-up event. Callback batching may legitimately coalesce notifications; total duration ~600 ms.
     setenv("DM_AUDIO", "1", 1);
     if (test_output_lifetime()) return 1;
     char out2[64]; gbuf b2[6]; static int16_t pcm2[6][4800 * 2]; g_sig = 0;
@@ -119,8 +164,8 @@ int main(void) {
     double total = (now_ns() - t0) / 1e6;
     h_au_Close(out2);
     int sig2 = atomic_load_explicit(&g_sig, memory_order_acquire);
-    int ok2 = got2 == 6 && order_ok && sig2 == 6 && total > 520;
-    printf("suspend / resume: released %d/6 in order=%d events %d (expected 6), total duration lower bound 520 ms, got %.0f ms %s\n", got2, order_ok, sig2, total, ok2 ? "✓" : "✗");
+    int ok2 = got2 == 6 && order_ok && sig2 >= 1 && sig2 <= got2 && total > 520;
+    printf("suspend / resume: released %d/6 in order=%d events %d (expected 1..6), total duration lower bound 520 ms, got %.0f ms %s\n", got2, order_ok, sig2, total, ok2 ? "✓" : "✗");
     if (!ok2) return 1;
 
     // Scenario 3: the device stops calling back while the output plays (iOS does this when another audio session takes over, without telling the AudioUnit). 20 blocks of 100 ms; at 150 ms the AudioUnit is stopped behind the host's back.
