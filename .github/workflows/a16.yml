@@ -37,6 +37,8 @@ jobs:
           /tmp/pretrim
           clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_ubd_envelope.c -o /tmp/ubd-envelope
           /tmp/ubd-envelope
+          clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_ubd_page_index.c -o /tmp/ubd-page-index
+          /tmp/ubd-page-index
           clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_sbw_sparse.c -o /tmp/sbw-sparse
           /tmp/sbw-sparse
           clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined dm/gfx/tests/t_pso_retry.c -o /tmp/pso-retry
