@@ -19,7 +19,7 @@ typedef struct {
     uint64_t headroom, changes;
     double gpu_ms, frame_ms;
     int measuring, measured_frames, measured_complete;
-    double measured_fps, measured_p95;
+    double measured_fps, measured_p95, measured_seconds;
 } dm_tuning_snapshot;
 
 void dm_tuning_init(void *page, unsigned capabilities, int width, int height);
