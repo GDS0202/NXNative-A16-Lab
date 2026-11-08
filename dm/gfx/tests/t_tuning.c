@@ -116,7 +116,7 @@ int main(void) {
     uint64_t start_changes = dm_tuning_read().changes;
     for (int i = 0; i < 1802; i++) {
         now += 16666667ull;
-        dm_tuning_tick(now, i < 900 ? 24 : 8, 16.666667, 0);
+        dm_tuning_tick(now, i < 900 ? 24 : 8, 16.666667, 0, 0);
         dm_tuning_present(now);
     }
     s = dm_tuning_read();
