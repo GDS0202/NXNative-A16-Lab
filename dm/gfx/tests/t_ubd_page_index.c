@@ -27,12 +27,11 @@ int main(void) {
         assert(!idx.wide);
         assert(may_overlap(&idx, &env, lo, lo + 64));
     }
-    // The gap after the last update is inside the envelope but its 4 KiB
-    // page is absent: the full-table negative probe must terminate.
-    // Put an extra known page in the envelope by extending an existing
-    // update at the far edge, without an additional hash insertion.
+    // Probe a missing page against a completely full table. Before the fix
+    // the index lookup never terminated, even though the page was absent.
+    // The new write to that page then forces conservative wide fallback.
     assert(!nvn_ubd_index_may_overlap(&idx, 1024ull * 4096u, 1024ull * 4096u + 1));
-    assert(may_overlap(&idx, 4096u - 32u, 4096u + 64u)); // adjacent real page
+    assert(may_overlap(&idx, &env, 4096u - 32u, 4096u + 64u)); // adjacent real page
     add(&idx, &env, 1024ull * 4096u, 1024ull * 4096u + 64u);
     assert(idx.wide); // no more room: fail closed
     assert(may_overlap(&idx, &env, 2000, 2048)); // gap in first page: false-positive acceptable
