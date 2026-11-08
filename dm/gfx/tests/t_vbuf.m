@@ -130,7 +130,7 @@ int main(void) { @autoreleasepool {
     S.vbuf[0].address = (uint64_t)(mem + 3); S.vbuf[0].size = 4;
     uint64_t ubgpu; mtl_gpu_addr((uint64_t)ub, 16, &mb, &off, &ubgpu);
     mtl_sub_begin(); en = encoder(ps); bind_vbufs(en); enc_r_vbuf(en, TF_SLOT, ubgpu); enc_r_draw(en, MTLPrimitiveTypePoint, 0, 1); enc_r_end(en);
-    sbw_note((uint64_t)ub, 16, SBW_GPU);
+    sbw_note((uint64_t)ub, 16, SBW_GPU, NVN_SBW_FROM_STORAGE);
     S.vbuf[0].address = (uint64_t)(ub + 2); S.vbuf[0].size = 6;
     en = encoder(ps); bind_vbufs(en); capture(en, out, 19); enc_r_end(en); finish();
     EXPECT("unaligned stream reads shader write", 22u << 16, ((const uint32_t *)out.contents)[19 * 4]);
