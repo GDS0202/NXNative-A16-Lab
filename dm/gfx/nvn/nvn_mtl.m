@@ -5772,6 +5772,13 @@ static dispatch_queue_t g_arch_q; static _Atomic int g_arch_new, g_arch_new_vd, 
 @implementation ArchEpoch @end
 static ArchEpoch *g_ep; static os_unfair_lock g_ep_lock = OS_UNFAIR_LOCK_INIT;   // the current period
 static int g_arch_cap;   // compiles are captured (an archive folder, a serializer): immutable after pso4_init
+// An archive serializer can refuse pipelines after its internal store fills.
+// The archive must never become a condition for rendering: retry with the
+// plain compiler. If plain succeeds, leave capturing off for this run (the
+// existing captures still flush); a later version may split archive periods.
+// This is conservative: existing on-disk archives are not deleted.
+static _Atomic int g_arch_capture_bypass;
+static _Atomic uint64_t g_arch_capture_fallbacks;
 static dispatch_group_t g_arch_pending;   // periods handed over and not written yet
 static _Atomic uint64_t g_pb_built, g_pb_archived, g_pb_reused, g_pb_spec, g_pb_legacy, g_pb_base_ns;
 // Time by kind, all threads (the 'pipelines up to frame' line): archive lookups that found the base / found none, specializations, base compiles; predictions (submit thread)
@@ -5904,15 +5911,37 @@ static ArchEpoch *ep_enter(void) {   // the current period, joined: a flush hand
     return ep;
 }
 static void ep_leave(ArchEpoch *ep) { atomic_fetch_sub(&ep->active, 1); dispatch_group_leave(ep->busy); }
-// A compile the archive captures, in the current flush period, counted there when it built (vd: the base has a vertex layout). No task options: a captured base never imports
-// archive entries (see the compaction crash below)
-static id<MTLRenderPipelineState> arch_capture(MTL4RenderPipelineDescriptor *d, NSError **e, int vd) {
-    if (!g_arch_cap) return [g_comp4 newRenderPipelineStateWithDescriptor:d compilerTaskOptions:nil error:e];
+// A compile the archive captures, in the current flush period. *captured is
+// true ONLY for a pipeline actually captured by that serializer: a plain
+// fallback must not count toward compaction or the archive's new-base totals.
+static id<MTLRenderPipelineState> arch_capture(MTL4RenderPipelineDescriptor *d, NSError **e, int vd, int *captured) {
+    if (captured) *captured = 0;
+    if (!g_arch_cap || atomic_load_explicit(&g_arch_capture_bypass, memory_order_acquire))
+        return [g_comp4 newRenderPipelineStateWithDescriptor:d compilerTaskOptions:nil error:e];
     ArchEpoch *ep = ep_enter();
-    id<MTLRenderPipelineState> ps = [ep->comp newRenderPipelineStateWithDescriptor:d compilerTaskOptions:nil error:e];
-    if (ps) { atomic_fetch_add(&ep->n, 1); atomic_fetch_add(&g_arch_new, 1); if (vd) { atomic_fetch_add(&ep->vd, 1); atomic_fetch_add(&g_arch_new_vd, 1); } }
-    ep_leave(ep);
-    return ps;
+    NSError *ce = nil;
+    id<MTLRenderPipelineState> ps = [ep->comp newRenderPipelineStateWithDescriptor:d compilerTaskOptions:nil error:&ce];
+    if (ps) {
+        atomic_fetch_add(&ep->n, 1); atomic_fetch_add(&g_arch_new, 1);
+        if (vd) { atomic_fetch_add(&ep->vd, 1); atomic_fetch_add(&g_arch_new_vd, 1); }
+    }
+    ep_leave(ep); // a stalled or broken archive never holds up a plain retry
+    if (ps) { if (captured) *captured = 1; if (e) *e = nil; return ps; }
+    NSError *pe = nil;
+    ps = g_comp4 ? [g_comp4 newRenderPipelineStateWithDescriptor:d compilerTaskOptions:nil error:&pe] : nil;
+    if (ps) {
+        atomic_fetch_add(&g_arch_capture_fallbacks, 1);
+        if (!atomic_exchange_explicit(&g_arch_capture_bypass, 1, memory_order_acq_rel))
+            MLOG("[RED] pipeline archive compiler refused a base (%s), while the plain compiler built it: capturing disabled for this run; old archive files retained",
+                 ce ? ce.localizedDescription.UTF8String : "no archive error");
+        if (e) *e = nil;
+        return ps;
+    }
+    // The plain compiler also refused the shader: keep the actual error and
+    // leave capture enabled. Do not mistake a genuinely invalid shader for
+    // evidence that the archive's store is full.
+    if (e) *e = pe ?: ce;
+    return nil;
 }
 static void pso4_init(void) {
     static dispatch_once_t once;
@@ -6008,6 +6037,12 @@ static void arch_note_new(void) {   // a base was compiled: flush 10 s later (on
 }
 static void arch_compact_finish(void) {   // after the period that holds the recaptured bases is written (arch_write): the old files go once their bases are in the new one
     if (!g_compact_files || !g_compacted) return;
+    // A failed archive capture can fall back to plain pipelines: those bases
+    // are NOT in the compacted archive, so preserve every old file.
+    if (atomic_load_explicit(&g_arch_capture_bypass, memory_order_acquire)) {
+        MLOG("pipeline archive compaction: plain compiler fallback used; previous archive files retained");
+        return;
+    }
     if (!g_arch_flush_ok) { MLOG("[RED] pipeline archive: compaction left the old files (the flush failed)"); return; }
     for (NSString *f in g_compact_files) unlink(f.fileSystemRepresentation);
     MLOG("pipeline archive compacted: %lu files of bases with a vertex layout gave %d bases to the file just written and were removed", (unsigned long)g_compact_files.count, (int)g_compacted);
@@ -6108,15 +6143,17 @@ static id<MTLRenderPipelineState> pso_build_mode(MTLRenderPipelineDescriptor *d,
         if (base && from_run && g_compact_enabled && atomic_load(&g_warm_running)) {
             // Metal can crash in materializeAirNTFromOnlineForSlice when serializing archive imports mixed with fresh bases (#342).
             // Work around that framework bug by capturing the original shader functions, without lookupArchives. The normal compiler cache still applies.
-            id<MTLRenderPipelineState> cb = arch_capture(b, nil, vd);
-            if (cb) { base = cb; g_compacted++; }
+            int recaptured = 0;
+            id<MTLRenderPipelineState> cb = arch_capture(b, nil, vd, &recaptured);
+            if (cb) { base = cb; if (recaptured) g_compacted++; }
         }
         if (!base) {
             if (g_arch4.count + g_arch4p.count) { g_pt_miss_n++; g_pt_miss_ns += t1 - t0; }
             if (compile) {
-                NSError *be = nil; base = arch_capture(b, &be, vd); job->error = be; job->compiled = 1;
+                NSError *be = nil; int captured = 0;
+                base = arch_capture(b, &be, vd, &captured); job->error = be; job->compiled = 1;
                 g_pt_comp_ns += bp_now() - t1;
-                if (base) { g_pb_built++; if (g_arch_cap) arch_note_new(); }
+                if (base) { g_pb_built++; if (captured) arch_note_new(); }
             }
         }
         if (base || compile) g_pb_base_ns += bp_now() - t0;
