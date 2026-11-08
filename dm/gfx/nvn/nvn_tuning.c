@@ -146,11 +146,15 @@ void dm_tuning_tick(uint64_t now, double gpu, double frame, double compilation, 
         samples = good_windows = bad_windows = 0; window_start = last_change = now; changed = 0; apply();
     }
     state.gpu_ms = gpu; state.frame_ms = frame;
-    // The OS can cap presentation to 30 FPS while the GPU is capable of 60.
-    // Do not degrade scene quality to chase an FPS rate temporarily forbidden
-    // by memory protection. Resume ordinary feedback on release of the cap.
-    if (state.requested.automatic && state.effective_cap > 0 &&
-        state.effective_cap < state.requested.target && (state.cap_reasons & 8)) {
+    // A memory-protection cap below the requested FPS is not a reason to
+    // sacrifice quality when the GPU already fits the allowed frame budget.
+    // But a 40-60 ms GPU frame still misses even a 30 FPS protective cap:
+    // keep reducing GPU workload to the *attainable* capped budget, not to
+    // the temporarily impossible 60 FPS target.
+    int memory_limited = state.requested.automatic && state.effective_cap > 0 &&
+        state.effective_cap < state.requested.target && (state.cap_reasons & 8);
+    double allowed_gpu_ms = memory_limited ? 1000.0 / state.effective_cap : 0;
+    if (memory_limited && (!isfinite(gpu) || gpu <= allowed_gpu_ms * .98)) {
         samples = good_windows = bad_windows = 0;
         window_start = last = now;
         state.status = DM_TUNE_MEMORY_CAP;
@@ -171,7 +175,7 @@ void dm_tuning_tick(uint64_t now, double gpu, double frame, double compilation, 
     if (samples < 120 && (now - window_start < 1000000000ull || samples < 20)) goto done;
     double g = percentile(gpu_samples, samples, .90), f = percentile(frame_samples, samples, .50);
     samples = 0; window_start = now;
-    double budget = 1000.0 / state.requested.target;
+    double budget = memory_limited ? allowed_gpu_ms : 1000.0 / state.requested.target;
     int overloaded = g > budget * .98, spare = g < budget * .75 && f <= budget * 1.12;
     bad_windows = overloaded ? bad_windows + 1 : 0;
     good_windows = spare ? good_windows + 1 : 0;
