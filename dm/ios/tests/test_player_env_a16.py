@@ -20,6 +20,7 @@ class PlayerEnvHazardTests(unittest.TestCase):
 #include <assert.h>
 int main(void) {
     assert(!dm_player_diagnostic_key("DM_NVN_SBW_FINE"));
+    assert(!dm_player_diagnostic_key("DM_NVN_SBW_TRACE"));
     assert(!dm_player_diagnostic_key("DM_NVN_ENC_THREAD"));
     assert(dm_player_diagnostic_key("DM_NVN_HELD_SCAN"));
     assert(dm_player_diagnostic_key("DM_NVN_PASSDUMP"));
