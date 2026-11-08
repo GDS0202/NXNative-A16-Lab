@@ -146,6 +146,46 @@ On a 60 Hz display, 30 and 60 fps have regular refresh divisors. A 25 fps cap
 cannot produce equally spaced refreshes on that display. Prefer a measured
 stable 30 fps option over an unproven 60 fps claim, while keeping a 60 fps trial.
 
+## Optional uniform GPU-write attribution (A16 source-only candidate)
+
+When BOTW's shrine GPU time or in-pass uniform updates spike, identify the
+origin of conservatively tracked writes **before** proposing to relax a
+dependency check. Add this single line to the app's `Documents/env.txt` while
+the app is stopped, then restart:
+
+```ini
+DM_NVN_SBW_TRACE=1
+```
+
+This key is allowed by the player-mode env filter. It records only aggregate
+counters (no guest addresses, game files, shader names, or per-draw dumps).
+Every ~300 frames, `log.txt` may contain:
+
+- `uniform GPU-write analysis`: unknown/large/capacity reports, global
+  overflow shadow refusals, and real 16-byte tile overlaps.
+- `uniform GPU-write origins`: **storage**, **bindless** and **texture-copy**
+  note counts with unknown-size, oversized and page-table-capacity breakdowns.
+
+The bindless write's current span is unknown: it **must** continue to
+invalidate the safe shadow optimization until its writable bounds can be
+proven. Source note counts include repeated bindings and do **not** count
+distinct shader writes, actual pass cuts, or unique draw calls. A known
+storage-buffer note is likewise not proof the shader actually wrote memory.
+
+Run the source-only analyzer using the **same run's** log:
+
+```sh
+python3 scripts/a16_gpu_hazards.py log.txt --out a16-sbw-report.json
+```
+
+After collecting the relevant shrine and outdoor windows, remove the key or
+set `DM_NVN_SBW_TRACE=0` and restart. The opt-in atomics may change CPU
+timings: **do not compare FPS from a traced run against an untraced baseline**.
+For performance comparisons, disable tracing on both sides, keep the same
+scene/cache/thermal conditions and use the controlled `sbw-fine` vs
+`sbw-page` profiles. These are diagnostics and experimental settings, not
+verified on-device speedups.
+
 ## Historical rendering diagnostics
 
 No purple artifacts are reported for NXNative. The following are general
