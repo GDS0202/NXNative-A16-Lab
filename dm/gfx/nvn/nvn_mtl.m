@@ -768,7 +768,10 @@ static int mtl_cpu_copy(uint64_t addr, uint64_t n, void *out) {
     // Restore the original conservative GPU-resident path for same-scene A/B
     // and unexpected games whose pool lifetime differs from BOTW.
     static int nores = -1;
-    if (nores < 0) { const char *env = getenv("DM_NVN_CPU_READ_NORES"); nores = !env || atoi(env) != 0; }
+    if (nores < 0) { const char *env = getenv("DM_NVN_CPU_READ_NORES"); nores = !env || atoi(env) != 0;
+        MLOG("A16 CPU-only pool lookup avoids GPU residency: %s (DM_NVN_CPU_READ_NORES=%s; unset defaults to enabled)",
+             nores ? "ENABLED" : "DISABLED", env ? env : "unset");
+    }
     if (!nores) {
         void *mb; uint64_t offset;
         if (!mtl_addr(addr, n, &mb, &offset)) return 0;
@@ -903,7 +906,10 @@ static _Atomic uint64_t g_sbw_zero_slots[6][16]; // zero-sized RW binding by NVN
 extern uint64_t nvn_sparse_gen(void);
 static int sbw_scoped_on(void) {
     static int on = -1;
-    if (on < 0) { const char *s = getenv("DM_NVN_SBW_SCOPED"); on = s && atoi(s) != 0; }
+    if (on < 0) { const char *s = getenv("DM_NVN_SBW_SCOPED"); on = s && atoi(s) != 0;
+        MLOG("A16 scoped writable storage tracking: %s (DM_NVN_SBW_SCOPED=%s; sparse mapping generation at first use %llu; unknown sizes are conservative when disabled)",
+             on ? "ENABLED" : "DISABLED", s ? s : "unset", (unsigned long long)nvn_sparse_gen());
+    }
     return on;
 }
 void mtl_sbw_scoped_diagnostics(uint64_t out[5], uint64_t slots[96]) {
@@ -3708,12 +3714,39 @@ static int rt_dup_slot(const p_set_rt *r, int i) {
     }
     return 0;
 }
+// Opt-in because PixelFormatView may disable lossless compression on Apple GPUs.
+// Eligible non-compressed render targets are upgraded by the existing full
+// slice/mipmap copy and fence-safe alias-retirement path before attachment.
+static int rt_view_upgrade_on(void) {
+    static int on = -1;
+    if (on < 0) { const char *s = getenv("DM_NVN_RT_VIEW_UPGRADE"); on = s && atoi(s) != 0;
+        MLOG("A16 alternate render-target format-view recovery: %s (DM_NVN_RT_VIEW_UPGRADE=%s)",
+             on ? "ENABLED" : "DISABLED", s ? s : "unset");
+    }
+    return on;
+}
 static void attach(MTLRenderPassAttachmentDescriptor *a, const tex_t *t, const view_t *v, int has_v) {
     id<MTLTexture> base = tex_mtl(t); a.texture = base;
     if (has_v && v->set_levels) a.level = v->base_level;
     if (has_v && v->set_layers) { if (t->d.target == 2) a.depthPlane = v->min_layer; else a.slice = v->min_layer; }
     if (base && mtl_fmt_block(base.pixelFormat)) { if (!bcrt_attach(a, base, v, has_v)) { rt_view_fmt(base, v, has_v); a.texture = nil; } return; }   // compressed formats: a shadow or nothing (see rt_view_fmt)
     if (base && mtl_fmt_depth(base.pixelFormat) && bcrt_attach(a, base, v, has_v)) return;   // a depth texture through a colour view: a shadow (see shrt_block)
+    // The original attachment view path reports a lost format reinterpretation
+    // when the texture was created without PixelFormatView. Upgrade it *before*
+    // encoding this render pass and only for non-BC/non-depth render targets.
+    // Retain the old behavior when opt-in is off or memory pressure is active.
+    if (base && has_v && v->set_format && !mtl_fmt_depth(base.pixelFormat)
+        && (base.usage & MTLTextureUsageRenderTarget) && !atomic_load(&g_mem_level)
+        && rt_view_upgrade_on()) {
+        uint32_t want = 0; uint8_t swz[4];
+        if (nvn_fmt_to_mtl(v->format, &want, swz) && want
+            && want != (uint32_t)base.pixelFormat
+            && tex_need_pfv(base.pixelFormat, (MTLPixelFormat)want)
+            && !(base.usage & MTLTextureUsagePixelFormatView)) {
+            id<MTLTexture> upgraded = tex_upgrade_pfv(t, base, (MTLPixelFormat)want);
+            if (upgraded && upgraded != base) { base = upgraded; a.texture = base; }
+        }
+    }
     // A view that changes the format is attached as a Metal view of that format (pipeline formats follow the attachment). SMBW's last pass writes the RGBA8 swapchain texture through an RGBA8_SRGB view, so the hardware encodes sRGB on write;
     // attaching the base texture instead stored the linear values as they were and the whole picture came out dark (every value decoded from sRGB once more, on the Mac and the iPhone). The view lives until this submission completes
     if (base && has_v && v->set_format) {
