@@ -85,6 +85,9 @@ t_pso_retry: t_pso_retry.c ../nvn/nvn_pso_retry.h
 	clang $(CFLAGS) -o $@ t_pso_retry.c
 t_ubd_envelope: t_ubd_envelope.c ../nvn/nvn_ubd_envelope.h
 	clang $(CFLAGS) -o $@ t_ubd_envelope.c
+
+t_ubd_page_index: t_ubd_page_index.c ../nvn/nvn_ubd_page_index.h ../nvn/nvn_ubd_envelope.h
+	clang $(CFLAGS) -o $@ t_ubd_page_index.c
 t_sbw_range: t_sbw_range.c ../nvn/nvn_sbw_range.h
 	clang $(CFLAGS) -o $@ t_sbw_range.c
 t_sbw_sparse: t_sbw_sparse.c ../nvn/nvn_sbw_sparse.h ../nvn/nvn_sbw_range.h
