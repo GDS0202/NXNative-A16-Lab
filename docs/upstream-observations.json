@@ -6,10 +6,77 @@
       "repo": "seedds/nxnative",
       "ref": "main",
       "reviewed_sha": "975bb4c14456d145eb3d969814534eecdd996ce9",
-      "observed_sha": "975bb4c14456d145eb3d969814534eecdd996ce9",
+      "observed_sha": "4b10c73ffb26c00bb1abb126e1c04bc9aa183e4b",
       "license": "MIT",
-      "pull_candidates": [],
-      "status": "reviewed-reference"
+      "pull_candidates": [
+        {
+          "number": 2593,
+          "head": "70be23d4c45bac0cbd4b08cea30771f2a1629785",
+          "areas": [
+            "memory",
+            "pipelines"
+          ],
+          "url": "https://github.com/seedds/nxnative/pull/2593"
+        },
+        {
+          "number": 2602,
+          "head": "83bb2b73b1e02b93000272fec9318bac0d2dba9d",
+          "areas": [
+            "memory"
+          ],
+          "url": "https://github.com/seedds/nxnative/pull/2602"
+        },
+        {
+          "number": 2616,
+          "head": "2c201227360c20afe0520caeb8dbdbf6bb77357e",
+          "areas": [
+            "memory",
+            "pipelines"
+          ],
+          "url": "https://github.com/seedds/nxnative/pull/2616"
+        },
+        {
+          "number": 2649,
+          "head": "e32b3ad4d165608cce797e8284b520e2ae46bf16",
+          "areas": [
+            "pipelines"
+          ],
+          "url": "https://github.com/seedds/nxnative/pull/2649"
+        },
+        {
+          "number": 2652,
+          "head": "914f7fa52af838fa95e100f35d2cc234e9eada3b",
+          "areas": [
+            "pipelines"
+          ],
+          "url": "https://github.com/seedds/nxnative/pull/2652"
+        },
+        {
+          "number": 2653,
+          "head": "560fc3cc5f089cfb361b0690100d654dcb6b63c8",
+          "areas": [
+            "pipelines"
+          ],
+          "url": "https://github.com/seedds/nxnative/pull/2653"
+        },
+        {
+          "number": 2659,
+          "head": "43de23bbb13ff3ffd315e105d41507627837fe85",
+          "areas": [
+            "pipelines"
+          ],
+          "url": "https://github.com/seedds/nxnative/pull/2659"
+        },
+        {
+          "number": 2663,
+          "head": "1179df1ed1d205048c12ffcbce6a382aa0294502",
+          "areas": [
+            "memory"
+          ],
+          "url": "https://github.com/seedds/nxnative/pull/2663"
+        }
+      ],
+      "status": "observed"
     },
     {
       "repo": "zenvyzenshiro/NXNativeWindows",
@@ -18,7 +85,7 @@
       "observed_sha": "269d61ff974b2e8e073d7357466ae130c3f6812f",
       "license": "MIT",
       "pull_candidates": [],
-      "status": "reviewed-reference"
+      "status": "observed"
     },
     {
       "repo": "Jeb0978/nxnative-a16",
@@ -27,7 +94,7 @@
       "observed_sha": "ae43b9950e19d13d66614c23992796ed288fc431",
       "license": "MIT",
       "pull_candidates": [],
-      "status": "reviewed-reference"
+      "status": "observed"
     },
     {
       "repo": "4ppp44/nxnative-ios17",
@@ -36,7 +103,7 @@
       "observed_sha": "f5bf6a8e1090efa53ef92ecabed11e09b062c7c6",
       "license": "MIT",
       "pull_candidates": [],
-      "status": "reviewed-reference"
+      "status": "observed"
     },
     {
       "repo": "frs0n/macnativegames",
@@ -45,16 +112,16 @@
       "observed_sha": "e58b2bd08ca54f82af1449bbfb812843f5e63de3",
       "license": "MIT",
       "pull_candidates": [],
-      "status": "reviewed-reference"
+      "status": "observed"
     },
     {
       "repo": "widmonstertony/nxnative",
       "ref": "main",
       "reviewed_sha": "93578abad6704ae95fbf60e80027469f145b02cf",
-      "observed_sha": "93578abad6704ae95fbf60e80027469f145b02cf",
+      "observed_sha": "c59afaafe3954fb34ac3fcfb187d0e484dd71e8a",
       "license": "MIT",
       "pull_candidates": [],
-      "status": "reviewed-reference"
+      "status": "observed"
     },
     {
       "repo": "widmonstertony/nxnative",
@@ -63,7 +130,7 @@
       "observed_sha": "3d2c3805f71d5749da2c4686f530547041ec3f69",
       "license": "MIT",
       "pull_candidates": [],
-      "status": "reviewed-reference"
+      "status": "unavailable-no-integration"
     }
   ]
 }
