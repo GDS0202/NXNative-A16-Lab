@@ -6,10 +6,76 @@
       "repo": "seedds/nxnative",
       "ref": "main",
       "reviewed_sha": "975bb4c14456d145eb3d969814534eecdd996ce9",
-      "observed_sha": "975bb4c14456d145eb3d969814534eecdd996ce9",
+      "observed_sha": "67736c9959422f3df80b4ce81319e567687927df",
       "license": "MIT",
-      "pull_candidates": [],
-      "status": "reviewed-reference"
+      "pull_candidates": [
+        {
+          "number": 2649,
+          "head": "ff4b5a66750edaa9cb1f99b125503da89a27e303",
+          "areas": [
+            "pipelines"
+          ],
+          "url": "https://github.com/seedds/nxnative/pull/2649"
+        },
+        {
+          "number": 2706,
+          "head": "046f79fad4469cd20cd2a4544e7e799f28d68cb9",
+          "areas": [
+            "pipelines"
+          ],
+          "url": "https://github.com/seedds/nxnative/pull/2706"
+        },
+        {
+          "number": 2826,
+          "head": "a19de5ec490194dfc504e5318d747b6a13cacc18",
+          "areas": [
+            "pipelines"
+          ],
+          "url": "https://github.com/seedds/nxnative/pull/2826"
+        },
+        {
+          "number": 2869,
+          "head": "d0cbb933977f1ff10822a3a472267d3e96db8273",
+          "areas": [
+            "pipelines"
+          ],
+          "url": "https://github.com/seedds/nxnative/pull/2869"
+        },
+        {
+          "number": 3063,
+          "head": "f2594a5db81e13bfbac427e4b20acd9bb5047759",
+          "areas": [
+            "pipelines"
+          ],
+          "url": "https://github.com/seedds/nxnative/pull/3063"
+        },
+        {
+          "number": 3109,
+          "head": "cd9421e9ba890c89d1a8a91d4c72285624613d47",
+          "areas": [
+            "pacing",
+            "pipelines"
+          ],
+          "url": "https://github.com/seedds/nxnative/pull/3109"
+        },
+        {
+          "number": 3123,
+          "head": "78e35ce9242753b144db8a60f873135b13ae99ab",
+          "areas": [
+            "pipelines"
+          ],
+          "url": "https://github.com/seedds/nxnative/pull/3123"
+        },
+        {
+          "number": 3124,
+          "head": "844134c0df834beadeb88d90405e5d0374fc58bd",
+          "areas": [
+            "pipelines"
+          ],
+          "url": "https://github.com/seedds/nxnative/pull/3124"
+        }
+      ],
+      "status": "observed"
     },
     {
       "repo": "zenvyzenshiro/NXNativeWindows",
@@ -18,7 +84,7 @@
       "observed_sha": "269d61ff974b2e8e073d7357466ae130c3f6812f",
       "license": "MIT",
       "pull_candidates": [],
-      "status": "reviewed-reference"
+      "status": "observed"
     },
     {
       "repo": "Jeb0978/nxnative-a16",
@@ -27,7 +93,7 @@
       "observed_sha": "ae43b9950e19d13d66614c23992796ed288fc431",
       "license": "MIT",
       "pull_candidates": [],
-      "status": "reviewed-reference"
+      "status": "observed"
     },
     {
       "repo": "4ppp44/nxnative-ios17",
@@ -36,7 +102,7 @@
       "observed_sha": "f5bf6a8e1090efa53ef92ecabed11e09b062c7c6",
       "license": "MIT",
       "pull_candidates": [],
-      "status": "reviewed-reference"
+      "status": "observed"
     },
     {
       "repo": "frs0n/macnativegames",
@@ -45,16 +111,16 @@
       "observed_sha": "e58b2bd08ca54f82af1449bbfb812843f5e63de3",
       "license": "MIT",
       "pull_candidates": [],
-      "status": "reviewed-reference"
+      "status": "observed"
     },
     {
       "repo": "widmonstertony/nxnative",
       "ref": "main",
       "reviewed_sha": "93578abad6704ae95fbf60e80027469f145b02cf",
-      "observed_sha": "93578abad6704ae95fbf60e80027469f145b02cf",
+      "observed_sha": "c5c5995c3b406393fc14968dbb878df1a9f14895",
       "license": "MIT",
       "pull_candidates": [],
-      "status": "reviewed-reference"
+      "status": "observed"
     },
     {
       "repo": "widmonstertony/nxnative",
@@ -63,7 +129,7 @@
       "observed_sha": "3d2c3805f71d5749da2c4686f530547041ec3f69",
       "license": "MIT",
       "pull_candidates": [],
-      "status": "reviewed-reference"
+      "status": "unavailable-no-integration"
     }
   ]
 }
