@@ -6,10 +6,28 @@
       "repo": "seedds/nxnative",
       "ref": "main",
       "reviewed_sha": "975bb4c14456d145eb3d969814534eecdd996ce9",
-      "observed_sha": "975bb4c14456d145eb3d969814534eecdd996ce9",
+      "observed_sha": "d379ceda33b26c29897d022f5bcbf9660bbd732f",
       "license": "MIT",
-      "pull_candidates": [],
-      "status": "reviewed-reference"
+      "pull_candidates": [
+        {
+          "number": 1160,
+          "head": "12a09b9d0e76022390733ff289eb5386bf1bade5",
+          "areas": [
+            "pipelines"
+          ],
+          "url": "https://github.com/seedds/nxnative/pull/1160"
+        },
+        {
+          "number": 3457,
+          "head": "ee667f7c61e8bba6a4416e24bddc8cbb8a0e3ba7",
+          "areas": [
+            "memory",
+            "textures"
+          ],
+          "url": "https://github.com/seedds/nxnative/pull/3457"
+        }
+      ],
+      "status": "observed"
     },
     {
       "repo": "zenvyzenshiro/NXNativeWindows",
@@ -18,7 +36,7 @@
       "observed_sha": "269d61ff974b2e8e073d7357466ae130c3f6812f",
       "license": "MIT",
       "pull_candidates": [],
-      "status": "reviewed-reference"
+      "status": "observed"
     },
     {
       "repo": "Jeb0978/nxnative-a16",
@@ -27,7 +45,7 @@
       "observed_sha": "ae43b9950e19d13d66614c23992796ed288fc431",
       "license": "MIT",
       "pull_candidates": [],
-      "status": "reviewed-reference"
+      "status": "observed"
     },
     {
       "repo": "4ppp44/nxnative-ios17",
@@ -36,7 +54,7 @@
       "observed_sha": "f5bf6a8e1090efa53ef92ecabed11e09b062c7c6",
       "license": "MIT",
       "pull_candidates": [],
-      "status": "reviewed-reference"
+      "status": "observed"
     },
     {
       "repo": "frs0n/macnativegames",
@@ -45,16 +63,16 @@
       "observed_sha": "e58b2bd08ca54f82af1449bbfb812843f5e63de3",
       "license": "MIT",
       "pull_candidates": [],
-      "status": "reviewed-reference"
+      "status": "observed"
     },
     {
       "repo": "widmonstertony/nxnative",
       "ref": "main",
       "reviewed_sha": "93578abad6704ae95fbf60e80027469f145b02cf",
-      "observed_sha": "93578abad6704ae95fbf60e80027469f145b02cf",
+      "observed_sha": "9cbe0d9275726817e2c852ff15cd9f8ede4d3c02",
       "license": "MIT",
       "pull_candidates": [],
-      "status": "reviewed-reference"
+      "status": "observed"
     },
     {
       "repo": "widmonstertony/nxnative",
@@ -63,7 +81,7 @@
       "observed_sha": "3d2c3805f71d5749da2c4686f530547041ec3f69",
       "license": "MIT",
       "pull_candidates": [],
-      "status": "reviewed-reference"
+      "status": "unavailable-no-integration"
     }
   ]
 }
